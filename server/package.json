@@ -1,0 +1,48 @@
+{
+  "name": "laiki-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx src/db/migrate.ts",
+    "db:migrate:prod": "node dist/db/migrate.js",
+    "db:push": "drizzle-kit push",
+    "seed": "tsx src/db/seed.ts",
+    "line:richmenu:setup": "node dist/scripts/setupRichMenu.js",
+    "line:richmenu:upload": "node dist/scripts/uploadRichMenuImage.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:integration": "vitest run test/"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.96.0",
+    "@google/genai": "^0.7.0",
+    "@hono/node-server": "^1.13.0",
+    "@line/bot-sdk": "^9.5.0",
+    "drizzle-orm": "^0.36.0",
+    "hono": "^4.6.0",
+    "node-cron": "^3.0.3",
+    "openai": "^6.38.0",
+    "pino": "^10.3.1",
+    "postgres": "^3.4.5",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@testcontainers/postgresql": "^11.14.0",
+    "@types/node": "^22.9.0",
+    "@types/node-cron": "^3.0.11",
+    "@vitest/ui": "^4.1.6",
+    "drizzle-kit": "^0.28.0",
+    "testcontainers": "^11.14.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^4.1.6"
+  }
+}
