@@ -54,11 +54,13 @@ export async function handleFollow(event: webhook.FollowEvent): Promise<void> {
   if (event.replyToken) {
     const qr = quickReplyActions([
       { label: "試打字記帳", data: "action=demo_text", displayText: "早餐 65 現金" },
-      { label: "開啟設定", uri: `${LIFF_BASE}/settings` },
-      { label: "開啟帳戶", uri: `${LIFF_BASE}/accounts` },
+      { label: "拍發票教學", data: "action=demo_image", displayText: "怎麼拍發票？" },
+      { label: "開啟儀表板", uri: `${LIFF_BASE}/dashboard` },
+      { label: "帳戶設定", uri: `${LIFF_BASE}/accounts` },
+      { label: "邀請夥伴", uri: `${LIFF_BASE}/groups` },
     ]);
     await replyMessages(event.replyToken, [
-      flexWithQuickReply(buildOnboardingFlex(LIFF_BASE), qr),
+      flexWithQuickReply(buildOnboardingFlex(LIFF_BASE, profile.displayName), qr),
     ]);
   }
 }

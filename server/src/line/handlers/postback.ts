@@ -7,6 +7,8 @@ import { applyDelta, signedAmount } from "../../lib/accountDelta.js";
 import { canAccessAccount } from "../../lib/resolveAccount.js";
 import { replyText, replyMessages, quickReplyActions, showLoading } from "../reply.js";
 import { buildCategoryPickerFlex } from "../flex/categoryPicker.js";
+import { buildAccountPickerFlex } from "../flex/accountPicker.js";
+import { listUserAccounts } from "../../lib/resolveAccount.js";
 import { t } from "../../lib/i18n.js";
 import {
   personalBalance,
@@ -236,6 +238,23 @@ export async function handlePostback(event: webhook.PostbackEvent): Promise<void
     return;
   }
 
+  if (action === "demo_image") {
+    await replyText(
+      replyToken,
+      [
+        "📸 拍發票記帳教學",
+        "",
+        "1. 拍下發票或收據（建議光線充足、平放）",
+        "2. 直接傳圖片給我",
+        "3. AI 自動辨識金額、商家、分類、日期",
+        "4. 一次可傳多張，會一起記帳並回覆統整結果",
+        "",
+        "信心過低時會提示你手動補上。",
+      ].join("\n"),
+    );
+    return;
+  }
+
   if (action === "record_paid") {
     const groupId = params.get("groupId");
     const fromUserId = params.get("fromUserId");
@@ -306,11 +325,20 @@ export async function handlePostback(event: webhook.PostbackEvent): Promise<void
   if (action === "change_account") {
     const txId = params.get("txId");
     const accountId = params.get("accountId");
-    if (!txId || !accountId) return;
+    if (!txId) return;
     const lineUserId = event.source?.userId;
     if (!lineUserId) return;
     const [u] = await db.select().from(users).where(eq(users.lineUserId, lineUserId)).limit(1);
     if (!u) return;
+    if (!accountId) {
+      const accts = await listUserAccounts(u.id);
+      if (!accts.length) {
+        await replyText(replyToken, "你還沒有任何帳戶");
+        return;
+      }
+      await replyMessages(replyToken, [buildAccountPickerFlex(txId, accts)]);
+      return;
+    }
     const ok = await canAccessAccount(u.id, accountId);
     if (!ok) {
       await replyText(replyToken, "你沒有權限使用此帳戶");
