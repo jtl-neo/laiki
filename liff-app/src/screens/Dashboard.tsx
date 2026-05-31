@@ -14,8 +14,8 @@ interface Me {
 interface AiUsage {
   parse_count: number;
   recognize_count: number;
-  parse_quota: number;
-  recognize_quota: number;
+  parse_quota: number | null;
+  recognize_quota: number | null;
 }
 
 interface Summary {
@@ -129,8 +129,14 @@ export default function Dashboard() {
       {usage && (
         <div className="block bg-amber-50 border border-amber-200 rounded-2xl p-3">
           <div className="text-xs text-amber-700">
-            本月平台用量：解析 {usage.parse_count}/{usage.parse_quota} · 辨識{" "}
-            {usage.recognize_count}/{usage.recognize_quota}
+            本月平台用量：解析{" "}
+            {usage.parse_quota == null
+              ? `${usage.parse_count} 筆（無上限）`
+              : `${usage.parse_count}/${usage.parse_quota}`}{" "}
+            · 辨識{" "}
+            {usage.recognize_quota == null
+              ? `${usage.recognize_count} 筆（無上限）`
+              : `${usage.recognize_count}/${usage.recognize_quota}`}
           </div>
         </div>
       )}
