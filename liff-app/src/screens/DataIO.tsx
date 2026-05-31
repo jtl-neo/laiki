@@ -87,7 +87,7 @@ export default function DataIO() {
         <section className="bg-white rounded-lg p-4 shadow-sm space-y-3">
           <h2 className="font-medium">匯出資料</h2>
           <p className="text-xs text-neutral-500">
-            下載個人帳戶、交易、預算、推播偏好為 JSON 檔案。不包含群組分帳資料與 API 金鑰。
+            下載個人帳戶、交易、預算、推播偏好為 JSON 檔案。不包含群組分帳資料。
           </p>
           <button
             onClick={() => exportMut.mutate()}

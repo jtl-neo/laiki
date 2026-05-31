@@ -3,7 +3,6 @@ import { z } from "zod";
 import { requireSession } from "../../lib/auth.js";
 import { checkAndConsume } from "../../lib/quota.js";
 import { parseText } from "../../ai/parseTransaction.js";
-import { t } from "../../lib/i18n.js";
 
 const app = new Hono<{ Variables: { userId: string } }>();
 
@@ -18,7 +17,6 @@ app.post("/parse", async (c) => {
 
   const userId = c.get("userId");
   const quota = await checkAndConsume(userId, "parse");
-  if (!quota.allowed) return c.json({ error: t("quota_exceeded") }, 429);
 
   try {
     const result = await parseText(quota.provider, parsed.data.text);

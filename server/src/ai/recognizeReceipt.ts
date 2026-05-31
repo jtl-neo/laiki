@@ -1,11 +1,31 @@
 import { z } from "zod";
 import type { AIProvider, JsonSchema } from "./providers/types.js";
 
+const nullableStr = z.preprocess(
+  (v) => {
+    if (typeof v !== "string") return v;
+    const t = v.trim();
+    if (t === "" || t.toLowerCase() === "null" || t.toLowerCase() === "undefined") return null;
+    return t;
+  },
+  z.string().nullable().optional(),
+);
+
+const txDateStr = z.preprocess(
+  (v) => {
+    if (typeof v !== "string") return v;
+    const t = v.trim();
+    if (t === "" || t.toLowerCase() === "null" || t.toLowerCase() === "undefined") return null;
+    return /^\d{4}-\d{2}-\d{2}$/.test(t) ? t : null;
+  },
+  z.string().nullable().optional(),
+);
+
 export const RecognizeResultSchema = z.object({
   amount: z.number().positive(),
-  tx_date: z.string().nullable().optional(),
-  category: z.string().nullable().optional(),
-  merchant: z.string().nullable().optional(),
+  tx_date: txDateStr,
+  category: nullableStr,
+  merchant: nullableStr,
   items: z
     .array(
       z.object({
@@ -16,8 +36,8 @@ export const RecognizeResultSchema = z.object({
     )
     .optional(),
   confidence: z.number().min(0).max(1).default(0.8),
-  account_hint: z.string().nullable().optional(),
-  note: z.string().nullable().optional(),
+  account_hint: nullableStr,
+  note: nullableStr,
 });
 
 export type RecognizeResult = z.infer<typeof RecognizeResultSchema>;

@@ -14,7 +14,6 @@ interface NotificationPrefs {
 
 interface Me {
   user: { id: string; displayName: string; pictureUrl: string | null };
-  byok: { keyHint: string } | null;
 }
 
 interface Row {
@@ -140,11 +139,6 @@ export default function Settings() {
         <SectionList
           title="工具"
           rows={[
-            {
-              to: "/apikey",
-              label: "API 金鑰 (BYOK)",
-              hint: data.byok ? data.byok.keyHint : "未綁定",
-            },
             { to: "/budgets", label: "預算" },
             { to: "/data", label: "匯入 / 匯出" },
           ]}

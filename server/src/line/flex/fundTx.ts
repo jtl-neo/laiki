@@ -62,7 +62,7 @@ export function buildFundTxFlex(input: FundTxInput): messagingApi.FlexMessage {
     },
     footer: {
       type: "box",
-      layout: "horizontal",
+      layout: "vertical",
       spacing: "sm",
       contents: [
         {
@@ -71,16 +71,34 @@ export function buildFundTxFlex(input: FundTxInput): messagingApi.FlexMessage {
           height: "sm",
           action: {
             type: "postback",
-            label: "取消",
-            data: `action=cancel_tx&txId=${input.txId}`,
-            displayText: "取消這筆",
+            label: input.kind === "fund_in" ? "改為支出" : "改為存入",
+            data: `action=flip_fund_kind&txId=${input.txId}`,
+            displayText: input.kind === "fund_in" ? "改為支出" : "改為存入",
           },
         },
         {
-          type: "button",
-          style: "primary",
-          height: "sm",
-          action: { type: "uri", label: "編輯", uri: input.liffEditUrl },
+          type: "box",
+          layout: "horizontal",
+          spacing: "sm",
+          contents: [
+            {
+              type: "button",
+              style: "secondary",
+              height: "sm",
+              action: {
+                type: "postback",
+                label: "取消",
+                data: `action=cancel_tx&txId=${input.txId}`,
+                displayText: "取消這筆",
+              },
+            },
+            {
+              type: "button",
+              style: "primary",
+              height: "sm",
+              action: { type: "uri", label: "編輯", uri: input.liffEditUrl },
+            },
+          ],
         },
       ],
     },

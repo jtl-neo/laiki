@@ -44,15 +44,6 @@ export default function Help() {
         </section>
 
         <section className="bg-white rounded-lg p-4 shadow-sm space-y-2">
-          <h2 className="font-bold text-base">BYOK（自帶 AI 金鑰）</h2>
-          <ul className="list-disc list-inside text-neutral-700 space-y-1">
-            <li>支援 Gemini / OpenAI / Anthropic / Ollama</li>
-            <li>綁定後不計平台配額，無使用上限</li>
-            <li>金鑰加密儲存，可隨時刪除</li>
-          </ul>
-        </section>
-
-        <section className="bg-white rounded-lg p-4 shadow-sm space-y-2">
           <h2 className="font-bold text-base">匯入 / 匯出</h2>
           <p>
             在「設定 → 匯入 / 匯出」可下載 JSON 完整資料、或從備份還原到新帳號。

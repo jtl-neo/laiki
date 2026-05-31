@@ -22,6 +22,16 @@ interface Me {
 
 type Tab = "accounts" | "groups";
 
+const DEFAULT_ICONS: Record<string, string> = {
+  cash: "💵",
+  bank: "🏦",
+  credit: "💳",
+  debit: "🪪",
+  ewallet: "📱",
+};
+const DEFAULT_ICON_SET = new Set(Object.values(DEFAULT_ICONS));
+const defaultIconFor = (t: string) => DEFAULT_ICONS[t] ?? "💰";
+
 export default function Accounts() {
   const nav = useNavigate();
   const qc = useQueryClient();
@@ -30,7 +40,7 @@ export default function Accounts() {
   const [name, setName] = useState("");
   const [type, setType] = useState("cash");
   const [initialBalance, setInitialBalance] = useState("0");
-  const [icon, setIcon] = useState("");
+  const [icon, setIcon] = useState(defaultIconFor("cash"));
   const [color, setColor] = useState("#10b981");
 
   const { data: accs, isLoading } = useQuery({
@@ -50,7 +60,7 @@ export default function Accounts() {
           name,
           type,
           initialBalance: Number(initialBalance),
-          icon: icon || null,
+          icon: icon || defaultIconFor(type),
           color: color || null,
         }),
       }),
@@ -60,7 +70,7 @@ export default function Accounts() {
       setShowNew(false);
       setName("");
       setInitialBalance("0");
-      setIcon("");
+      setIcon(defaultIconFor(type));
     },
   });
 
@@ -196,7 +206,11 @@ export default function Accounts() {
               <label className="field-label">類型</label>
               <select
                 value={type}
-                onChange={(e) => setType(e.target.value)}
+                onChange={(e) => {
+                  const nt = e.target.value;
+                  setType(nt);
+                  if (!icon || DEFAULT_ICON_SET.has(icon)) setIcon(defaultIconFor(nt));
+                }}
                 className="field-input"
               >
                 <option value="cash">現金</option>

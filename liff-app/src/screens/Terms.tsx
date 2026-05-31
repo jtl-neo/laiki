@@ -40,11 +40,11 @@ export default function Terms() {
           <h2 className="font-bold text-base">2. 資料使用</h2>
           <ul className="list-disc list-inside text-neutral-700 space-y-1">
             <li>提供記帳、分帳、AI 解析等核心功能</li>
-            <li>透過第三方 LLM（Gemini / OpenAI / Anthropic / Ollama）解析訊息內容</li>
+            <li>透過第三方 LLM 解析訊息內容</li>
             <li>產生個人化報告、分類建議</li>
           </ul>
           <p className="text-neutral-700">
-            若你綁定 BYOK 自訂 API 金鑰，內容會送往你設定的 LLM 端點。否則使用平台預設 LLM 供應商。
+            訊息內容會送往平台預設 LLM 供應商進行解析。
           </p>
         </section>
 
@@ -52,7 +52,6 @@ export default function Terms() {
           <h2 className="font-bold text-base">3. 資料儲存與安全</h2>
           <ul className="list-disc list-inside text-neutral-700 space-y-1">
             <li>所有資料儲存於台灣或東亞區域的雲端資料庫</li>
-            <li>API 金鑰以 AES-256-GCM 加密儲存</li>
             <li>傳輸全程使用 HTTPS</li>
             <li>後台管理人員為個人開發者，僅在除錯或客服需求下查閱</li>
           </ul>
@@ -63,7 +62,7 @@ export default function Terms() {
           <p>本服務使用以下第三方：</p>
           <ul className="list-disc list-inside text-neutral-700 space-y-1">
             <li>LINE Corporation（訊息傳輸、登入認證）</li>
-            <li>LLM 供應商（內容解析；BYOK 模式下由你決定）</li>
+            <li>LLM 供應商（內容解析）</li>
           </ul>
           <p className="text-neutral-700">
             上述第三方有各自的隱私政策，請另行參閱。

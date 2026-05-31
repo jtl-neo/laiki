@@ -23,6 +23,8 @@ import {
   groupMembersData,
 } from "../commands.js";
 import { buildPersonalMenuFlex, buildGroupMenuFlex } from "../flex/menu.js";
+import { buildFundTxFlex } from "../flex/fundTx.js";
+import { groupMembersCompact } from "../commands.js";
 import { buildBalanceFlex } from "../flex/balance.js";
 import { buildMonthlyFlex } from "../flex/monthly.js";
 import {
@@ -472,6 +474,67 @@ export async function handlePostback(event: webhook.PostbackEvent): Promise<void
       { label: "選單", data: "action=menu" },
     ]);
     await replyText(replyToken, t("tx_cancelled"), qr);
+    return;
+  }
+
+  if (action === "flip_fund_kind") {
+    const txId = params.get("txId");
+    if (!txId) return;
+    const [tx] = await db.select().from(transactions).where(eq(transactions.id, txId)).limit(1);
+    if (!tx) {
+      await replyText(replyToken, "找不到該筆交易");
+      return;
+    }
+    if (tx.kind !== "fund_in" && tx.kind !== "fund_out") {
+      await replyText(replyToken, "此筆非基金交易");
+      return;
+    }
+    const oldKind = tx.kind;
+    const newKind: "fund_in" | "fund_out" = oldKind === "fund_in" ? "fund_out" : "fund_in";
+    const amount = Number(tx.amount);
+    await applyDelta(tx.accountId, -signedAmount(oldKind, amount));
+    await db
+      .update(transactions)
+      .set({ kind: newKind, updatedAt: new Date() })
+      .where(eq(transactions.id, txId));
+    await applyDelta(tx.accountId, signedAmount(newKind, amount));
+
+    const [acct] = await db.select().from(accounts).where(eq(accounts.id, tx.accountId)).limit(1);
+    if (!acct) return;
+    const [payer] = tx.paidByUserId
+      ? await db.select().from(users).where(eq(users.id, tx.paidByUserId)).limit(1)
+      : [];
+    const newBalance = Number(acct.balance ?? 0);
+
+    let userContribution: number | undefined;
+    if (newKind === "fund_in" && tx.groupId && tx.paidByUserId) {
+      const [contribRow] = await db
+        .select({ total: sql<string>`coalesce(sum(${transactions.amount}), 0)` })
+        .from(transactions)
+        .where(
+          dand(
+            eq(transactions.groupId, tx.groupId),
+            eq(transactions.kind, "fund_in"),
+            eq(transactions.paidByUserId, tx.paidByUserId),
+          ),
+        );
+      userContribution = Number(contribRow?.total ?? 0);
+    }
+
+    const roster = tx.groupId ? await groupMembersCompact(tx.groupId) : "";
+    await replyMessages(replyToken, [
+      buildFundTxFlex({
+        txId: tx.id,
+        user: payer?.displayName ?? "成員",
+        kind: newKind,
+        amount,
+        fundBalance: newBalance,
+        fundName: acct.name,
+        liffEditUrl: `${LIFF_BASE}/tx/${tx.id}/edit`,
+        note: roster || null,
+        userContribution,
+      }),
+    ]);
     return;
   }
 }

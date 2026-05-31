@@ -1,10 +1,9 @@
 import type { webhook } from "@line/bot-sdk";
 import { eq } from "drizzle-orm";
 import { db } from "../../db/client.js";
-import { users, groups, groupMembers } from "../../db/schema.js";
-import { replyMessages } from "../reply.js";
+import { groups } from "../../db/schema.js";
+import { replyMessages, replyText } from "../reply.js";
 import { buildGroupTypePicker } from "../flex/groupTypePicker.js";
-import { fetchLineGroupName } from "../groupName.js";
 
 export async function handleJoin(event: webhook.JoinEvent): Promise<void> {
   const source = event.source;
@@ -13,51 +12,24 @@ export async function handleJoin(event: webhook.JoinEvent): Promise<void> {
     source.type === "group" ? source.groupId : source.type === "room" ? source.roomId : null;
   if (!lineGroupId) return;
 
-  try {
-    const [existing] = await db
-      .select()
-      .from(groups)
-      .where(eq(groups.lineGroupId, lineGroupId))
-      .limit(1);
+  if (!event.replyToken) return;
 
-    if (!existing) {
-      const [anyUser] = await db.select().from(users).limit(1);
-      if (anyUser) {
-        const groupName = (await fetchLineGroupName(lineGroupId)) ?? "LINE 群組";
-        const [g] = await db
-          .insert(groups)
-          .values({
-            type: "shared",
-            name: groupName,
-            lineGroupId,
-            ownerUserId: anyUser.id,
-          })
-          .returning();
-        if (g) {
-          await db
-            .insert(groupMembers)
-            .values({
-              groupId: g.id,
-              userId: anyUser.id,
-              role: "owner",
-              joinedVia: "line_group",
-            })
-            .onConflictDoNothing();
-        }
-      }
-    }
-  } catch (e) {
-    console.error("[line] join upsert failed:", e);
+  // Look up the group; do NOT create it here. Group creation is handled lazily by
+  // the first real message (registerGroupParticipant), which correctly assigns the
+  // speaking user as owner. Creating it here would leak an arbitrary user as owner.
+  const [g] = await db
+    .select()
+    .from(groups)
+    .where(eq(groups.lineGroupId, lineGroupId))
+    .limit(1);
+
+  if (g) {
+    await replyMessages(event.replyToken, [buildGroupTypePicker({ groupId: g.id })]);
+    return;
   }
 
-  if (event.replyToken) {
-    const [g] = await db
-      .select()
-      .from(groups)
-      .where(eq(groups.lineGroupId, lineGroupId))
-      .limit(1);
-    if (g) {
-      await replyMessages(event.replyToken, [buildGroupTypePicker({ groupId: g.id })]);
-    }
-  }
+  await replyText(
+    event.replyToken,
+    "嗨！我是來記帳 🤖\n請任一位成員在群組內傳一則訊息，我就能把你登記進來、完成設定。",
+  );
 }

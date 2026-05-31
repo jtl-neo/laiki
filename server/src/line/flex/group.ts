@@ -437,13 +437,6 @@ export function buildQuotaExceededFlex(args: {
         contents: [
           {
             type: "button",
-            style: "primary",
-            color: "#1DB446",
-            height: "sm",
-            action: { type: "uri", label: "設定 API Key", uri: `${args.liffBase}/apikey` },
-          },
-          {
-            type: "button",
             style: "link",
             height: "sm",
             action: { type: "uri", label: "手動新增", uri: `${args.liffBase}/tx/new` },

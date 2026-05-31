@@ -12,6 +12,7 @@ import {
   jsonb,
   unique,
   boolean,
+  index,
 } from "drizzle-orm/pg-core";
 
 const bytea = customType<{ data: Buffer; default: false }>({
@@ -213,6 +214,25 @@ export const aiUsage = pgTable(
   }),
 );
 
+export const aiRecords = pgTable("ai_records", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  groupId: uuid("group_id").references(() => groups.id, { onDelete: "set null" }),
+  op: text("op").notNull(),
+  source: text("source").notNull(),
+  provider: text("provider").notNull(),
+  model: text("model"),
+  inputText: text("input_text"),
+  imageCount: integer("image_count").notNull().default(0),
+  rawOutput: text("raw_output"),
+  parsedJson: jsonb("parsed_json"),
+  confidence: numeric("confidence", { precision: 4, scale: 3 }),
+  transactionId: uuid("transaction_id").references(() => transactions.id, { onDelete: "set null" }),
+  errorMessage: text("error_message"),
+  latencyMs: integer("latency_ms"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const aiInsights = pgTable("ai_insights", {
   id: uuid("id").primaryKey().defaultRandom(),
   groupId: uuid("group_id").notNull().references(() => groups.id, { onDelete: "cascade" }),
@@ -258,6 +278,27 @@ export const sessions = pgTable("sessions", {
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+export const pendingEntries = pgTable(
+  "pending_entries",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    groupId: uuid("group_id").references(() => groups.id, { onDelete: "cascade" }),
+    lineGroupId: text("line_group_id"),
+    mode: text("mode").notNull(),
+    step: text("step").notNull(),
+    draft: jsonb("draft").notNull(),
+    aiRecordId: uuid("ai_record_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  },
+  (t) => ({
+    byUser: index("pending_entries_user_idx").on(t.userId),
+    byExpiry: index("pending_entries_expires_idx").on(t.expiresAt),
+  }),
+);
 
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;

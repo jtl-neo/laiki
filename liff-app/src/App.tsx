@@ -10,7 +10,6 @@ import Transfer from "./screens/Transfer";
 import GroupDetail from "./screens/GroupDetail";
 import TxList from "./screens/TxList";
 import TxNew from "./screens/TxNew";
-import ApiKey from "./screens/ApiKey";
 import Settings from "./screens/Settings";
 import Budgets from "./screens/Budgets";
 import Recurring from "./screens/Recurring";
@@ -42,7 +41,6 @@ export default function App() {
       <Route path="/tx/new" element={<TxNew />} />
       <Route path="/tx/:txId/edit" element={<TxEdit />} />
 
-      <Route path="/apikey" element={<ApiKey />} />
       <Route path="/settings" element={<Settings />} />
       <Route path="/budgets" element={<Budgets />} />
       <Route path="/recurring" element={<Recurring />} />

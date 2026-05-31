@@ -2,10 +2,14 @@ import { eq, sql as dsql } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { accounts } from "../db/schema.js";
 
+// Accepts either the base db client or a transaction client (PgTransaction),
+// both of which expose the .update().set().where() builder used below.
+type DbOrTx = Pick<typeof db, "update">;
+
 export async function applyDelta(
   accountId: string,
   delta: number,
-  tx: typeof db = db,
+  tx: DbOrTx = db,
 ): Promise<void> {
   await tx
     .update(accounts)

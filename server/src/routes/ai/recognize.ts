@@ -28,7 +28,6 @@ app.post("/", async (c) => {
 
   const userId = c.get("userId");
   const quota = await checkAndConsume(userId, "recognize");
-  if (!quota.allowed) return c.json({ error: "quota_exceeded" }, 402);
 
   const images =
     "images" in parsed.data

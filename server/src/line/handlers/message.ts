@@ -4,6 +4,7 @@ import { db } from "../../db/client.js";
 import { users, groups, groupMembers, transactions, transactionSplits, accounts } from "../../db/schema.js";
 import { parseText } from "../../ai/parseTransaction.js";
 import { checkAndConsume } from "../../lib/quota.js";
+import { recordAi } from "../../lib/aiRecords.js";
 import { listUserAccounts, resolveAccount } from "../../lib/resolveAccount.js";
 import { getAllFundAccountIds, getUserFundGroupIds } from "../../lib/fundFilters.js";
 import { applyDelta, signedAmount } from "../../lib/accountDelta.js";
@@ -33,7 +34,6 @@ import {
   buildGroupBalancesFlex,
   buildGroupSettleFlex,
   buildGroupMembersFlex,
-  buildQuotaExceededFlex,
 } from "../flex/group.js";
 import { LIFF_BASE, BOT_BASIC_ID } from "../../lib/config.js";
 import { logger } from "../../lib/logger.js";
@@ -68,12 +68,6 @@ export async function handleTextMessage(event: webhook.MessageEvent): Promise<vo
   await showLoading(lineUserId, 10);
 
   const quota = await checkAndConsume(user.id, "parse");
-  if (!quota.allowed) {
-    await replyMessages(event.replyToken, [
-      buildQuotaExceededFlex({ liffBase: LIFF_BASE }),
-    ]);
-    return;
-  }
 
   const personalErrorQR = quickReplyActions([
     { label: "手動新增", uri: `${LIFF_BASE}/tx/new` },
@@ -176,6 +170,19 @@ export async function handleTextMessage(event: webhook.MessageEvent): Promise<vo
     .returning();
 
   await applyDelta(account.id, signedAmount(kind, parsed.amount));
+
+  await recordAi({
+    userId: user.id,
+    groupId: group.id,
+    op: "parse",
+    source: "line_text",
+    provider: quota.providerName,
+    model: quota.model,
+    inputText: text,
+    parsedJson: parsed,
+    confidence: parsed.confidence,
+    transactionId: tx!.id,
+  });
 
   const flex = buildTxConfirmFlex({
     txId: tx!.id,
@@ -310,12 +317,6 @@ async function handleGroupText(
 
 
   const quota = await checkAndConsume(user.id, "parse");
-  if (!quota.allowed) {
-    await replyMessages(event.replyToken, [
-      buildQuotaExceededFlex({ liffBase: LIFF_BASE }),
-    ]);
-    return;
-  }
 
   const groupErrorQR = quickReplyActions([
     { label: "手動新增", uri: `${LIFF_BASE}/group/${group.id}/tx/new` },
@@ -402,6 +403,19 @@ async function handleGroupText(
     if (!fTx) return;
 
     await applyDelta(fundAcct.id, signedAmount(fundKind, fundAmount));
+
+    await recordAi({
+      userId: user.id,
+      groupId: group.id,
+      op: "parse",
+      source: "line_text",
+      provider: quota.providerName,
+      model: quota.model,
+      inputText: stripped,
+      parsedJson: parsed,
+      confidence: parsed.confidence,
+      transactionId: fTx.id,
+    });
 
     const [updatedAcct] = await db
       .select()
@@ -495,6 +509,19 @@ async function handleGroupText(
   }
 
   await applyDelta(account.id, signedAmount(kind, amount));
+
+  await recordAi({
+    userId: user.id,
+    groupId: group.id,
+    op: "parse",
+    source: "line_text",
+    provider: quota.providerName,
+    model: quota.model,
+    inputText: stripped,
+    parsedJson: parsed,
+    confidence: parsed.confidence,
+    transactionId: tx.id,
+  });
 
   const roster = await groupMembersCompact(group.id);
   const baseNote = `${user.displayName ?? "成員"} 出，${members.length} 人平分`;

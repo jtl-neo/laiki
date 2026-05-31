@@ -7,6 +7,7 @@ import { lineBlobClient } from "../client.js";
 import { replyMessages, replyText, showLoading, quickReplyActions, flexWithQuickReply } from "../reply.js";
 import { recognizeReceipt } from "../../ai/recognizeReceipt.js";
 import { checkAndConsume } from "../../lib/quota.js";
+import { recordAi } from "../../lib/aiRecords.js";
 import { applyDelta, signedAmount } from "../../lib/accountDelta.js";
 import { t } from "../../lib/i18n.js";
 import { buildTxConfirmFlex } from "../flex/txConfirm.js";
@@ -256,7 +257,6 @@ async function processOneImage(
   accountName: string,
 ): Promise<PerImageResult> {
   const quota = await checkAndConsume(userId, "recognize");
-  if (!quota.allowed) return { status: "quota_exceeded" };
 
   let imageBase64: string;
   let mimeType: string;
@@ -307,6 +307,19 @@ async function processOneImage(
     .returning();
 
   await applyDelta(accountId, signedAmount("expense", amount));
+
+  await recordAi({
+    userId,
+    groupId,
+    op: "recognize",
+    source: "line_image",
+    provider: quota.providerName,
+    model: quota.model,
+    imageCount: 1,
+    parsedJson: parsed,
+    confidence: parsed.confidence,
+    transactionId: tx!.id,
+  });
 
   const flex = buildTxConfirmFlex({
     txId: tx!.id,

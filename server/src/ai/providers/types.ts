@@ -1,4 +1,4 @@
-export type ProviderName = "gemini" | "openai" | "anthropic" | "ollama";
+export type ProviderName = "gemini" | "openai" | "anthropic" | "ollama" | "groq" | "openrouter";
 
 export interface ProviderConfig {
   provider: ProviderName;
