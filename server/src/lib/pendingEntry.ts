@@ -6,7 +6,7 @@ import {
   groups,
   groupMembers,
 } from "../db/schema.js";
-import { eq, and, gt, isNull } from "drizzle-orm";
+import { eq, and, gt, isNull, desc } from "drizzle-orm";
 import { applyDelta, signedAmount } from "./accountDelta.js";
 import { getUserFundGroupIds } from "./fundFilters.js";
 import { logger } from "./logger.js";
@@ -24,6 +24,10 @@ export type DraftData = {
   merchant?: string | null;
   participantUserIds: string[];
   confidence: number;
+  /** Set once the user has explicitly confirmed the split roster (group_split). */
+  participantsConfirmed?: boolean;
+  /** Set once category is resolved/skipped so we never re-ask for it. */
+  categoryResolved?: boolean;
 };
 
 export type Mode = "personal" | "group_split" | "fund";
@@ -106,6 +110,36 @@ export async function getPending(pendingId: string): Promise<PendingRow | null> 
   }
 }
 
+/**
+ * Return the newest non-expired pending row for a given context:
+ * personal DM → lineGroupId null; group → that lineGroupId.
+ * Used so a plain typed number can answer an active need_amount prompt.
+ */
+export async function getActivePendingForContext(
+  userId: string,
+  lineGroupId: string | null,
+): Promise<PendingRow | null> {
+  try {
+    const scope =
+      lineGroupId === null
+        ? and(eq(pendingEntries.userId, userId), isNull(pendingEntries.lineGroupId))
+        : and(
+            eq(pendingEntries.userId, userId),
+            eq(pendingEntries.lineGroupId, lineGroupId),
+          );
+    const [row] = await db
+      .select()
+      .from(pendingEntries)
+      .where(and(scope, gt(pendingEntries.expiresAt, new Date())))
+      .orderBy(desc(pendingEntries.createdAt))
+      .limit(1);
+    return row ?? null;
+  } catch (err) {
+    logger.error({ err, userId, lineGroupId }, "failed to get active pending for context");
+    return null;
+  }
+}
+
 /** Merge a partial draft into the stored draft jsonb, bumping updatedAt. */
 export async function patchDraft(
   pendingId: string,
@@ -158,10 +192,13 @@ export async function deletePending(pendingId: string): Promise<void> {
 export function computeNextStep(mode: Mode, draft: DraftData): Step {
   if (draft.amount === null || draft.amount <= 0) return "need_amount";
   if (mode !== "fund" && draft.accountId === null) return "need_account";
-  if (mode === "group_split" && draft.participantUserIds.length === 0) {
+  if (mode === "group_split" && !draft.participantsConfirmed) {
     return "need_participants";
   }
-  if (draft.category === null) return "need_category";
+  // Fund auto-categorizes at commit time, so it never asks for a category.
+  if (mode !== "fund" && draft.category === null && !draft.categoryResolved) {
+    return "need_category";
+  }
   return "confirm";
 }
 

@@ -1,17 +1,24 @@
 import type { webhook } from "@line/bot-sdk";
-import { eq, sql, and as dand } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { db } from "../../db/client.js";
-import { users, groups, groupMembers, transactions, transactionSplits, accounts } from "../../db/schema.js";
+import { users, groups, groupMembers } from "../../db/schema.js";
 import { parseText } from "../../ai/parseTransaction.js";
 import { checkAndConsume } from "../../lib/quota.js";
 import { recordAi } from "../../lib/aiRecords.js";
 import { listUserAccounts, resolveAccount } from "../../lib/resolveAccount.js";
 import { getAllFundAccountIds, getUserFundGroupIds } from "../../lib/fundFilters.js";
-import { applyDelta, signedAmount } from "../../lib/accountDelta.js";
-import { t } from "../../lib/i18n.js";
+import {
+  type DraftData,
+  type DraftKind,
+  type Mode,
+  upsertPending,
+  setStep,
+  patchDraft,
+  computeNextStep,
+  getActivePendingForContext,
+} from "../../lib/pendingEntry.js";
+import { replyForStep, allGroupMemberIds } from "../draftFlow.js";
 import { replyMessages, replyText, showLoading, quickReplyActions, flexWithQuickReply } from "../reply.js";
-import { buildTxConfirmFlex } from "../flex/txConfirm.js";
-import { buildFundTxFlex } from "../flex/fundTx.js";
 import { buildErrorFlex } from "../flex/error.js";
 import { buildPersonalMenuFlex, buildGroupMenuFlex, buildGroupQuickMenuFlex } from "../flex/menu.js";
 import { fetchLineGroupName } from "../groupName.js";
@@ -65,6 +72,11 @@ export async function handleTextMessage(event: webhook.MessageEvent): Promise<vo
 
   if (await tryPersonalCommand(event.replyToken, user.id, text)) return;
 
+  // STEP 4: if there's an active draft for this DM waiting on the amount and the
+  // user simply typed a positive number, treat it as the amount answer instead
+  // of starting a brand-new parse.
+  if (await tryAnswerAmount(event.replyToken, user.id, null, text, "personal")) return;
+
   await showLoading(lineUserId, 10);
 
   const quota = await checkAndConsume(user.id, "parse");
@@ -99,37 +111,17 @@ export async function handleTextMessage(event: webhook.MessageEvent): Promise<vo
     return;
   }
 
-  if (parsed.confidence < 0.3) {
-    const lowParams = new URLSearchParams({ text });
-    if (parsed.amount) lowParams.set("amount", String(parsed.amount));
-    if (parsed.category) lowParams.set("category", parsed.category);
-    await replyMessages(event.replyToken, [
-      flexWithQuickReply(
-        buildErrorFlex({
-          title: "看不懂這句",
-          body: "信心過低。試試「早餐 65 現金」格式，或手動新增這筆。",
-          liffNewUrl: `${LIFF_BASE}/tx/new?${lowParams.toString()}`,
-        }),
-        personalErrorQR,
-      ),
-    ]);
-    return;
-  }
+  // Low confidence no longer hard-fails: as long as the parse succeeded with a
+  // usable amount, proceed to a draft and let the user confirm/edit interactively.
 
+  // Resolve the speaker's selectable (non-fund) accounts so we can try to
+  // pre-fill the account from the parsed hint (null if no match -> ask later).
   const fundAcctIdSet = new Set(await getAllFundAccountIds());
   const fundGroupIdSet = new Set(await getUserFundGroupIds(user.id));
   const userAccountsAll = await listUserAccounts(user.id);
   const userAccounts = userAccountsAll.filter((a) => !fundAcctIdSet.has(a.id));
-  const account = resolveAccount(userAccounts, parsed.account_hint);
-  if (!account) {
-    await replyText(
-      event.replyToken,
-      t("no_account", user.locale as "zh-TW"),
-      quickReplyActions([{ label: "建立帳戶", uri: `${LIFF_BASE}/accounts` }]),
-    );
-    return;
-  }
 
+  // Resolve the personal group the same way the file historically did.
   const memberRows = await db
     .select({ group: groups })
     .from(groupMembers)
@@ -142,34 +134,12 @@ export async function handleTextMessage(event: webhook.MessageEvent): Promise<vo
     await replyText(event.replyToken, "找不到群組，請重新加好友以初始化。");
     return;
   }
-
   let group = userGroups[0]!;
   if (parsed.group_hint) {
     const h = parsed.group_hint.toLowerCase();
     const match = userGroups.find((g) => g.name.toLowerCase().includes(h));
     if (match) group = match;
   }
-
-  const txDate = parsed.tx_date ?? new Date().toISOString().slice(0, 10);
-  const kind = parsed.kind === "transfer" ? "expense" : parsed.kind;
-
-  const [tx] = await db
-    .insert(transactions)
-    .values({
-      groupId: group.id,
-      accountId: account.id,
-      amount: parsed.amount.toFixed(2),
-      txDate,
-      paidByUserId: user.id,
-      category: parsed.category ?? null,
-      kind,
-      note: parsed.note ?? text,
-      source: "line_text",
-      aiConfidence: parsed.confidence.toFixed(3),
-    })
-    .returning();
-
-  await applyDelta(account.id, signedAmount(kind, parsed.amount));
 
   await recordAi({
     userId: user.id,
@@ -181,41 +151,33 @@ export async function handleTextMessage(event: webhook.MessageEvent): Promise<vo
     inputText: text,
     parsedJson: parsed,
     confidence: parsed.confidence,
-    transactionId: tx!.id,
   });
 
-  const flex = buildTxConfirmFlex({
-    txId: tx!.id,
-    amount: parsed.amount,
+  const kind: DraftKind = parsed.kind === "transfer" ? "expense" : parsed.kind;
+  const resolvedAccount = resolveAccount(userAccounts, parsed.account_hint);
+  const draft: DraftData = {
+    amount: parsed.amount ?? null,
+    kind,
     category: parsed.category ?? null,
-    accountName: account.name,
-    groupName: group.name,
-    note: parsed.note ?? null,
+    accountId: resolvedAccount?.id ?? null,
+    accountHint: parsed.account_hint ?? null,
+    note: parsed.note ?? text,
+    txDate: parsed.tx_date ?? null,
+    participantUserIds: [],
     confidence: parsed.confidence,
-    liffEditUrl: `${LIFF_BASE}/tx/${tx!.id}/edit`,
-  });
+  };
 
-  const others = userAccounts.filter((a) => a.id !== account.id).slice(0, 5);
-  const items: { label: string; data?: string; uri?: string; displayText?: string }[] = [
-    { label: "再記一筆", data: `action=again`, displayText: "再記一筆" },
-    {
-      label: "改分類",
-      data: `action=change_category&txId=${tx!.id}`,
-      displayText: "改分類",
-    },
-    {
-      label: "改金額",
-      data: `action=change_amount&txId=${tx!.id}`,
-      displayText: "改金額",
-    },
-    ...others.map((a) => ({
-      label: a.name.slice(0, 20),
-      data: `action=change_account&txId=${tx!.id}&accountId=${a.id}`,
-      displayText: `改成「${a.name}」`,
-    })),
-  ];
-  const qr = quickReplyActions(items);
-  await replyMessages(event.replyToken, [flexWithQuickReply(flex, qr)]);
+  const pending = await upsertPending({
+    userId: user.id,
+    groupId: group.id,
+    lineGroupId: null,
+    mode: "personal",
+    step: "need_amount",
+    draft,
+  });
+  const advanced =
+    (await setStep(pending.id, computeNextStep("personal", draft))) ?? pending;
+  await replyForStep(event.replyToken, advanced, "personal");
 }
 
 async function handleGroupText(
@@ -296,6 +258,11 @@ async function handleGroupText(
 
   if (await tryGroupCommand(event.replyToken, lineGroupId, stripped)) return;
 
+  // STEP 4: typed number answers an active group draft awaiting the amount.
+  if (await tryAnswerAmount(event.replyToken, user.id, lineGroupId, stripped, "group")) {
+    return;
+  }
+
   let [group] = await db
     .select()
     .from(groups)
@@ -347,168 +314,7 @@ async function handleGroupText(
     ]);
     return;
   }
-  if (parsed.confidence < 0.3) {
-    const gLowParams = new URLSearchParams({ text });
-    if (parsed.amount) gLowParams.set("amount", String(parsed.amount));
-    if (parsed.category) gLowParams.set("category", parsed.category);
-    await replyMessages(event.replyToken, [
-      flexWithQuickReply(
-        buildErrorFlex({
-          title: "看不懂這句",
-          body: "信心過低。試試「@Bot 火鍋 1200 平分 信用卡」格式。",
-          liffNewUrl: `${LIFF_BASE}/group/${group.id}/tx/new?${gLowParams.toString()}`,
-        }),
-        groupErrorQR,
-      ),
-    ]);
-    return;
-  }
-
-  if (group.type === "fund" && group.fundAccountId) {
-    const [fundAcct] = await db
-      .select()
-      .from(accounts)
-      .where(eq(accounts.id, group.fundAccountId))
-      .limit(1);
-    if (!fundAcct) {
-      await replyText(event.replyToken, "找不到基金帳戶");
-      return;
-    }
-    const rawKind = parsed.kind === "transfer" ? "expense" : parsed.kind;
-    const fundKind: "fund_in" | "fund_out" = rawKind === "income" ? "fund_in" : "fund_out";
-    const fundAmount = Number(parsed.amount);
-    const fundTxDate = parsed.tx_date ?? new Date().toISOString().slice(0, 10);
-    const fundCategory =
-      parsed.category && parsed.category.trim().length > 0
-        ? parsed.category
-        : fundKind === "fund_in"
-          ? "儲蓄"
-          : "基金支出";
-
-    const [fTx] = await db
-      .insert(transactions)
-      .values({
-        groupId: group.id,
-        accountId: fundAcct.id,
-        amount: fundAmount.toFixed(2),
-        txDate: fundTxDate,
-        paidByUserId: user.id,
-        category: fundCategory,
-        kind: fundKind,
-        note: parsed.note ?? text,
-        source: "line_text",
-        aiConfidence: parsed.confidence.toFixed(3),
-      })
-      .returning();
-    if (!fTx) return;
-
-    await applyDelta(fundAcct.id, signedAmount(fundKind, fundAmount));
-
-    await recordAi({
-      userId: user.id,
-      groupId: group.id,
-      op: "parse",
-      source: "line_text",
-      provider: quota.providerName,
-      model: quota.model,
-      inputText: stripped,
-      parsedJson: parsed,
-      confidence: parsed.confidence,
-      transactionId: fTx.id,
-    });
-
-    const [updatedAcct] = await db
-      .select()
-      .from(accounts)
-      .where(eq(accounts.id, fundAcct.id))
-      .limit(1);
-    const newBalance = Number(updatedAcct?.balance ?? 0);
-
-    let userContribution: number | undefined;
-    if (fundKind === "fund_in") {
-      const [contribRow] = await db
-        .select({
-          total: sql<string>`coalesce(sum(${transactions.amount}), 0)`,
-        })
-        .from(transactions)
-        .where(
-          dand(
-            eq(transactions.groupId, group.id),
-            eq(transactions.kind, "fund_in"),
-            eq(transactions.paidByUserId, user.id),
-          ),
-        );
-      userContribution = Number(contribRow?.total ?? 0);
-    }
-
-    const fundRoster = await groupMembersCompact(group.id);
-    await replyMessages(event.replyToken, [
-      buildFundTxFlex({
-        txId: fTx.id,
-        user: user.displayName ?? "成員",
-        kind: fundKind,
-        amount: fundAmount,
-        fundBalance: newBalance,
-        fundName: fundAcct.name,
-        liffEditUrl: `${LIFF_BASE}/tx/${fTx.id}/edit`,
-        note: fundRoster || null,
-        userContribution,
-      }),
-    ]);
-    return;
-  }
-
-  const fundAcctIdSet2 = new Set(await getAllFundAccountIds());
-  const userAccountsAll2 = await listUserAccounts(user.id);
-  const userAccounts = userAccountsAll2.filter(
-    (a) => !fundAcctIdSet2.has(a.id) || a.id === group.fundAccountId,
-  );
-  const account = resolveAccount(userAccounts, parsed.account_hint);
-  if (!account) {
-    await replyText(event.replyToken, "找不到付款帳戶。請先在 LIFF 建一個。");
-    return;
-  }
-
-  const members = await db
-    .select()
-    .from(groupMembers)
-    .where(eq(groupMembers.groupId, group.id));
-
-  const txDate = parsed.tx_date ?? new Date().toISOString().slice(0, 10);
-  const kind = parsed.kind === "transfer" ? "expense" : parsed.kind;
-  const amount = Number(parsed.amount);
-
-  const [tx] = await db
-    .insert(transactions)
-    .values({
-      groupId: group.id,
-      accountId: account.id,
-      amount: amount.toFixed(2),
-      txDate,
-      paidByUserId: user.id,
-      category: parsed.category ?? null,
-      kind,
-      note: parsed.note ?? text,
-      source: "line_text",
-      aiConfidence: parsed.confidence.toFixed(3),
-    })
-    .returning();
-  if (!tx) return;
-
-  if (members.length > 0) {
-    const each = Math.floor((amount * 100) / members.length) / 100;
-    const rows = members.map((m, i) => ({
-      transactionId: tx.id,
-      userId: m.userId,
-      amount: (i === members.length - 1
-        ? Math.round((amount - each * (members.length - 1)) * 100) / 100
-        : each
-      ).toFixed(2),
-    }));
-    await db.insert(transactionSplits).values(rows);
-  }
-
-  await applyDelta(account.id, signedAmount(kind, amount));
+  // Low confidence no longer hard-fails; proceed to an interactive draft.
 
   await recordAi({
     userId: user.id,
@@ -520,23 +326,121 @@ async function handleGroupText(
     inputText: stripped,
     parsedJson: parsed,
     confidence: parsed.confidence,
-    transactionId: tx.id,
   });
 
-  const roster = await groupMembersCompact(group.id);
-  const baseNote = `${user.displayName ?? "成員"} 出，${members.length} 人平分`;
-  const flex = buildTxConfirmFlex({
-    txId: tx.id,
-    amount,
+  if (group.type === "fund" && group.fundAccountId) {
+    // Fund mode: amount -> confirm. Account resolved at commit; category
+    // auto-applied (commitPending does not auto-categorize, so seed it here).
+    const rawKind = parsed.kind === "transfer" ? "expense" : parsed.kind;
+    const fundKind: DraftKind = rawKind === "income" ? "fund_in" : "fund_out";
+    const fundCategory =
+      parsed.category && parsed.category.trim().length > 0
+        ? parsed.category
+        : fundKind === "fund_in"
+          ? "儲蓄"
+          : "基金支出";
+    const fundDraft: DraftData = {
+      amount: parsed.amount ?? null,
+      kind: fundKind,
+      category: fundCategory,
+      accountId: null,
+      accountHint: parsed.account_hint ?? null,
+      note: parsed.note ?? text,
+      txDate: parsed.tx_date ?? null,
+      participantUserIds: [],
+      confidence: parsed.confidence,
+      categoryResolved: true,
+    };
+    const fundPending = await upsertPending({
+      userId: user.id,
+      groupId: group.id,
+      lineGroupId,
+      mode: "fund",
+      step: "need_amount",
+      draft: fundDraft,
+    });
+    const advanced =
+      (await setStep(fundPending.id, computeNextStep("fund", fundDraft))) ??
+      fundPending;
+    await replyForStep(event.replyToken, advanced, "fund");
+    return;
+  }
+
+  // group_split mode.
+  const fundAcctIdSet2 = new Set(await getAllFundAccountIds());
+  const userAccountsAll2 = await listUserAccounts(user.id);
+  const userAccounts = userAccountsAll2.filter(
+    (a) => !fundAcctIdSet2.has(a.id) || a.id === group.fundAccountId,
+  );
+  const account = resolveAccount(userAccounts, parsed.account_hint);
+  const kind: DraftKind = parsed.kind === "transfer" ? "expense" : parsed.kind;
+  const splitDraft: DraftData = {
+    amount: parsed.amount ?? null,
+    kind,
     category: parsed.category ?? null,
-    accountName: account.name,
-    groupName: group.name,
-    note: roster ? `${baseNote}｜${roster}` : baseNote,
+    accountId: account?.id ?? null,
+    accountHint: parsed.account_hint ?? null,
+    note: parsed.note ?? text,
+    txDate: parsed.tx_date ?? null,
+    participantUserIds: [],
+    participantsConfirmed: false,
     confidence: parsed.confidence,
-    liffEditUrl: `${LIFF_BASE}/tx/${tx.id}/edit`,
+  };
+  const splitPending = await upsertPending({
+    userId: user.id,
+    groupId: group.id,
+    lineGroupId,
+    mode: "group_split",
+    step: "need_amount",
+    draft: splitDraft,
   });
+  // If the flow will next ask for participants, pre-select everyone so the card
+  // shows all members checked (user can untick).
+  const nextStep = computeNextStep("group_split", splitDraft);
+  let advanced = (await setStep(splitPending.id, nextStep)) ?? splitPending;
+  if (nextStep === "need_participants") {
+    const everyone = await allGroupMemberIds(group.id);
+    advanced =
+      (await patchDraft(splitPending.id, { participantUserIds: everyone })) ??
+      advanced;
+  }
+  await replyForStep(event.replyToken, advanced, "group_split");
+}
 
-  await replyMessages(event.replyToken, [flex]);
+/**
+ * If an active draft for this context is waiting on the amount and the message
+ * is just a positive number, set it as the amount and advance. Returns true if
+ * handled (caller should stop). Keeps the typed-number shortcut self-contained.
+ */
+async function tryAnswerAmount(
+  replyToken: string,
+  userId: string,
+  lineGroupId: string | null,
+  text: string,
+  contextMode: "personal" | "group",
+): Promise<boolean> {
+  const trimmed = text.trim();
+  if (!/^\d+(\.\d+)?$/.test(trimmed)) return false;
+  const amount = Number(trimmed);
+  if (!Number.isFinite(amount) || amount <= 0) return false;
+
+  const active = await getActivePendingForContext(userId, lineGroupId);
+  if (!active || active.step !== "need_amount") return false;
+
+  const updated = await patchDraft(active.id, { amount });
+  if (!updated) return false;
+  const mode = updated.mode as Mode;
+  const draft = updated.draft as DraftData;
+  const next = computeNextStep(mode, draft);
+  let advanced = (await setStep(active.id, next)) ?? updated;
+  // Pre-select everyone if we just landed on participant selection.
+  if (next === "need_participants" && updated.groupId) {
+    const everyone = await allGroupMemberIds(updated.groupId);
+    advanced = (await patchDraft(active.id, { participantUserIds: everyone })) ?? advanced;
+  }
+  await replyForStep(replyToken, advanced, mode);
+  void contextMode;
+  return true;
 }
 
 async function tryPersonalCommand(

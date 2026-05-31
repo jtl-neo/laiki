@@ -24,7 +24,19 @@ import {
 } from "../commands.js";
 import { buildPersonalMenuFlex, buildGroupMenuFlex } from "../flex/menu.js";
 import { buildFundTxFlex } from "../flex/fundTx.js";
+import { buildTxConfirmFlex } from "../flex/txConfirm.js";
 import { groupMembersCompact } from "../commands.js";
+import {
+  type DraftData,
+  type Mode,
+  getPending,
+  patchDraft,
+  setStep,
+  deletePending,
+  computeNextStep,
+  commitPending,
+} from "../../lib/pendingEntry.js";
+import { replyForStep, allGroupMemberIds } from "../draftFlow.js";
 import { buildBalanceFlex } from "../flex/balance.js";
 import { buildMonthlyFlex } from "../flex/monthly.js";
 import {
@@ -41,6 +53,27 @@ export async function handlePostback(event: webhook.PostbackEvent): Promise<void
   const action = params.get("action");
   const replyToken = event.replyToken;
   if (!replyToken) return;
+
+  // ----- Draft-first accounting flow (pendingId-keyed actions) -----
+  const DRAFT_ACTIONS = new Set([
+    "set_amount",
+    "ask_amount",
+    "pick_account",
+    "toggle_member",
+    "select_all_members",
+    "members_done",
+    "ask_participants",
+    "set_category",
+    "skip_category",
+    "confirm_entry",
+    "cancel_entry",
+  ]);
+  // Only treat as a draft action when a pendingId is present, so the legacy
+  // txId-keyed actions (set_amount/set_category on a committed tx) still work.
+  if (action && DRAFT_ACTIONS.has(action) && params.get("pendingId")) {
+    await handleDraftAction(action, params, replyToken);
+    return;
+  }
 
   if (action === "group_type") {
     const groupId = params.get("groupId");
@@ -535,6 +568,180 @@ export async function handlePostback(event: webhook.PostbackEvent): Promise<void
         userContribution,
       }),
     ]);
+    return;
+  }
+}
+
+/**
+ * Handle a pendingId-keyed draft-flow action: mutate the draft, recompute the
+ * next step, and re-prompt via replyForStep. Each branch first loads the
+ * pending row and bails with a friendly message if it is missing/expired.
+ */
+async function handleDraftAction(
+  action: string,
+  params: URLSearchParams,
+  replyToken: string,
+): Promise<void> {
+  const pendingId = params.get("pendingId");
+  if (!pendingId) return;
+  const expiredMsg = "這筆已逾時或已處理，請重新輸入";
+
+  // Helper: re-resolve next step + reply for the (possibly mutated) row.
+  const advance = async (): Promise<void> => {
+    const p = await getPending(pendingId);
+    if (!p) {
+      await replyText(replyToken, expiredMsg);
+      return;
+    }
+    const mode = p.mode as Mode;
+    const draft = p.draft as DraftData;
+    const next = computeNextStep(mode, draft);
+    const updated = (await setStep(pendingId, next)) ?? p;
+    await replyForStep(replyToken, updated, mode);
+  };
+
+  if (action === "set_amount") {
+    const p = await getPending(pendingId);
+    if (!p) return void (await replyText(replyToken, expiredMsg));
+    const amount = Number(params.get("amount"));
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return void (await replyText(replyToken, "金額無效"));
+    }
+    await patchDraft(pendingId, { amount });
+    await advance();
+    return;
+  }
+
+  if (action === "ask_amount") {
+    const p = await getPending(pendingId);
+    if (!p) return void (await replyText(replyToken, expiredMsg));
+    const updated = (await setStep(pendingId, "need_amount")) ?? p;
+    await replyForStep(replyToken, updated, p.mode as Mode);
+    return;
+  }
+
+  if (action === "pick_account") {
+    const p = await getPending(pendingId);
+    if (!p) return void (await replyText(replyToken, expiredMsg));
+    const accountId = params.get("accountId");
+    if (!accountId) return void (await replyText(replyToken, "帳戶無效"));
+    await patchDraft(pendingId, { accountId });
+    await advance();
+    return;
+  }
+
+  if (action === "toggle_member") {
+    const p = await getPending(pendingId);
+    if (!p) return void (await replyText(replyToken, expiredMsg));
+    const userId = params.get("userId");
+    if (!userId) return void (await replyText(replyToken, "成員無效"));
+    const draft = p.draft as DraftData;
+    const set = new Set(draft.participantUserIds);
+    if (set.has(userId)) set.delete(userId);
+    else set.add(userId);
+    const updated =
+      (await patchDraft(pendingId, { participantUserIds: [...set] })) ?? p;
+    // Stay on need_participants and refresh the toggle card.
+    await replyForStep(replyToken, updated, p.mode as Mode);
+    return;
+  }
+
+  if (action === "select_all_members") {
+    const p = await getPending(pendingId);
+    if (!p) return void (await replyText(replyToken, expiredMsg));
+    const everyone = p.groupId ? await allGroupMemberIds(p.groupId) : [];
+    const updated =
+      (await patchDraft(pendingId, { participantUserIds: everyone })) ?? p;
+    await replyForStep(replyToken, updated, p.mode as Mode);
+    return;
+  }
+
+  if (action === "members_done") {
+    const p = await getPending(pendingId);
+    if (!p) return void (await replyText(replyToken, expiredMsg));
+    await patchDraft(pendingId, { participantsConfirmed: true });
+    await advance();
+    return;
+  }
+
+  if (action === "ask_participants") {
+    const p = await getPending(pendingId);
+    if (!p) return void (await replyText(replyToken, expiredMsg));
+    // Pre-select everyone again if nothing is currently chosen.
+    const draft = p.draft as DraftData;
+    const everyone = p.groupId ? await allGroupMemberIds(p.groupId) : [];
+    const participantUserIds =
+      draft.participantUserIds.length > 0 ? draft.participantUserIds : everyone;
+    await patchDraft(pendingId, {
+      participantsConfirmed: false,
+      participantUserIds,
+    });
+    const updated = (await setStep(pendingId, "need_participants")) ?? p;
+    await replyForStep(replyToken, updated, p.mode as Mode);
+    return;
+  }
+
+  if (action === "set_category") {
+    const p = await getPending(pendingId);
+    if (!p) return void (await replyText(replyToken, expiredMsg));
+    const category = params.get("category");
+    if (!category) return void (await replyText(replyToken, "分類無效"));
+    await patchDraft(pendingId, { category, categoryResolved: true });
+    await advance();
+    return;
+  }
+
+  if (action === "skip_category") {
+    const p = await getPending(pendingId);
+    if (!p) return void (await replyText(replyToken, expiredMsg));
+    await patchDraft(pendingId, { categoryResolved: true });
+    await advance();
+    return;
+  }
+
+  if (action === "confirm_entry") {
+    const p = await getPending(pendingId);
+    if (!p) return void (await replyText(replyToken, expiredMsg));
+    const mode = p.mode as Mode;
+    const draft = p.draft as DraftData;
+    const r = await commitPending(pendingId);
+    if ("error" in r) {
+      await replyText(replyToken, "記帳失敗，請稍後再試或手動新增。");
+      return;
+    }
+    // Build a success confirmation reusing buildTxConfirmFlex.
+    const [tx] = await db
+      .select()
+      .from(transactions)
+      .where(eq(transactions.id, r.txId))
+      .limit(1);
+    const accountId = tx?.accountId ?? draft.accountId;
+    const [acct] = accountId
+      ? await db.select().from(accounts).where(eq(accounts.id, accountId)).limit(1)
+      : [];
+    const groupId = tx?.groupId ?? p.groupId;
+    const [grp] = groupId
+      ? await db.select().from(groups).where(eq(groups.id, groupId)).limit(1)
+      : [];
+    const amount = Number(tx?.amount ?? draft.amount ?? 0);
+    await replyMessages(replyToken, [
+      buildTxConfirmFlex({
+        txId: r.txId,
+        amount,
+        category: tx?.category ?? draft.category ?? null,
+        accountName: acct?.name ?? (mode === "fund" ? "基金池" : "—"),
+        groupName: grp?.name ?? "—",
+        note: tx?.note ?? draft.note ?? null,
+        confidence: draft.confidence,
+        liffEditUrl: `${LIFF_BASE}/tx/${r.txId}/edit`,
+      }),
+    ]);
+    return;
+  }
+
+  if (action === "cancel_entry") {
+    await deletePending(pendingId);
+    await replyText(replyToken, "已取消 ❌");
     return;
   }
 }
