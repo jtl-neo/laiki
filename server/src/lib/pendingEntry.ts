@@ -4,11 +4,11 @@ import {
   transactions,
   transactionSplits,
   groups,
-  groupMembers,
+  aiRecords,
 } from "../db/schema.js";
-import { eq, and, gt, isNull, desc } from "drizzle-orm";
+import { eq, and, gt, lt, isNull, desc } from "drizzle-orm";
 import { applyDelta, signedAmount } from "./accountDelta.js";
-import { getUserFundGroupIds } from "./fundFilters.js";
+import { resolvePersonalGroupId } from "./ensureDefaults.js";
 import { logger } from "./logger.js";
 
 export type DraftKind = "expense" | "income" | "transfer" | "fund_in" | "fund_out";
@@ -175,6 +175,23 @@ export async function setStep(pendingId: string, step: Step): Promise<PendingRow
   }
 }
 
+/**
+ * Delete all expired pending rows (expiresAt < now). Returns the number of rows
+ * removed. Non-throwing: returns 0 on failure so the scheduler stays alive.
+ */
+export async function purgeExpiredPending(): Promise<number> {
+  try {
+    const deleted = await db
+      .delete(pendingEntries)
+      .where(lt(pendingEntries.expiresAt, new Date()))
+      .returning({ id: pendingEntries.id });
+    return deleted.length;
+  } catch (err) {
+    logger.error({ err }, "failed to purge expired pending entries");
+    return 0;
+  }
+}
+
 export async function deletePending(pendingId: string): Promise<void> {
   try {
     await db.delete(pendingEntries).where(eq(pendingEntries.id, pendingId));
@@ -200,24 +217,6 @@ export function computeNextStep(mode: Mode, draft: DraftData): Step {
     return "need_category";
   }
   return "confirm";
-}
-
-/**
- * Resolve the speaker's personal group, mirroring the personal path in
- * message.ts: member groups, excluding fund groups, prefer the one owned by
- * the user with no lineGroupId; fall back to the first non-fund member group.
- */
-async function resolvePersonalGroupId(userId: string): Promise<string | null> {
-  const fundGroupIdSet = new Set(await getUserFundGroupIds(userId));
-  const rows = await db
-    .select({ group: groups })
-    .from(groupMembers)
-    .innerJoin(groups, eq(groups.id, groupMembers.groupId))
-    .where(eq(groupMembers.userId, userId));
-  const userGroups = rows.map((r) => r.group).filter((g) => !fundGroupIdSet.has(g.id));
-  if (userGroups.length === 0) return null;
-  const personal = userGroups.find((g) => g.ownerUserId === userId && !g.lineGroupId);
-  return (personal ?? userGroups[0]!).id;
 }
 
 type CommitResult = { txId: string } | { error: string };
@@ -285,7 +284,6 @@ export async function commitPending(pendingId: string): Promise<CommitResult> {
         // personal
         if (!draft.accountId) throw new Error("missing_account");
         const personalGroupId = await resolvePersonalGroupId(row.userId);
-        if (!personalGroupId) throw new Error("personal_group_not_found");
         accountId = draft.accountId;
         groupId = personalGroupId;
       }
@@ -325,6 +323,22 @@ export async function commitPending(pendingId: string): Promise<CommitResult> {
 
       // Apply the balance delta exactly once for the account touched.
       await applyDelta(accountId, signedAmount(draft.kind, amount), tx);
+
+      // Link the originating AI record (if any) to the committed transaction.
+      // Best-effort: a failure here must never roll back the committed write.
+      if (row.aiRecordId) {
+        try {
+          await tx
+            .update(aiRecords)
+            .set({ transactionId: inserted.id })
+            .where(eq(aiRecords.id, row.aiRecordId));
+        } catch (linkErr) {
+          logger.warn(
+            { err: linkErr, aiRecordId: row.aiRecordId, txId: inserted.id },
+            "failed to link ai_record to transaction",
+          );
+        }
+      }
 
       return inserted.id;
     });

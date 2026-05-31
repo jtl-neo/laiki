@@ -5,6 +5,7 @@ import { users, groups, groupMembers } from "../../db/schema.js";
 import { parseText } from "../../ai/parseTransaction.js";
 import { checkAndConsume } from "../../lib/quota.js";
 import { recordAi } from "../../lib/aiRecords.js";
+import { resolvePersonalGroupId } from "../../lib/ensureDefaults.js";
 import { listUserAccounts, resolveAccount } from "../../lib/resolveAccount.js";
 import { getAllFundAccountIds, getUserFundGroupIds } from "../../lib/fundFilters.js";
 import {
@@ -121,27 +122,35 @@ export async function handleTextMessage(event: webhook.MessageEvent): Promise<vo
   const userAccountsAll = await listUserAccounts(user.id);
   const userAccounts = userAccountsAll.filter((a) => !fundAcctIdSet.has(a.id));
 
-  // Resolve the personal group the same way the file historically did.
-  const memberRows = await db
-    .select({ group: groups })
-    .from(groupMembers)
-    .innerJoin(groups, eq(groups.id, groupMembers.groupId))
-    .where(eq(groupMembers.userId, user.id));
-  const userGroups = memberRows
-    .map((r) => r.group)
-    .filter((g) => !fundGroupIdSet.has(g.id));
-  if (userGroups.length === 0) {
+  // Deterministically resolve the speaker's personal (DM) group: the group
+  // owned by the user with no lineGroupId (created by ensureUserDefaults).
+  const personalGroupId = await resolvePersonalGroupId(user.id);
+  const [personalGroup] = await db
+    .select()
+    .from(groups)
+    .where(eq(groups.id, personalGroupId))
+    .limit(1);
+  if (!personalGroup) {
     await replyText(event.replyToken, "找不到群組，請重新加好友以初始化。");
     return;
   }
-  let group = userGroups[0]!;
+  let group = personalGroup;
+  // A group_hint may still redirect to one of the user's other (non-fund) groups.
   if (parsed.group_hint) {
+    const memberRows = await db
+      .select({ group: groups })
+      .from(groupMembers)
+      .innerJoin(groups, eq(groups.id, groupMembers.groupId))
+      .where(eq(groupMembers.userId, user.id));
+    const userGroups = memberRows
+      .map((r) => r.group)
+      .filter((g) => !fundGroupIdSet.has(g.id));
     const h = parsed.group_hint.toLowerCase();
     const match = userGroups.find((g) => g.name.toLowerCase().includes(h));
     if (match) group = match;
   }
 
-  await recordAi({
+  const aiRecordId = await recordAi({
     userId: user.id,
     groupId: group.id,
     op: "parse",
@@ -174,6 +183,7 @@ export async function handleTextMessage(event: webhook.MessageEvent): Promise<vo
     mode: "personal",
     step: "need_amount",
     draft,
+    aiRecordId,
   });
   const advanced =
     (await setStep(pending.id, computeNextStep("personal", draft))) ?? pending;
@@ -316,7 +326,7 @@ async function handleGroupText(
   }
   // Low confidence no longer hard-fails; proceed to an interactive draft.
 
-  await recordAi({
+  const aiRecordId = await recordAi({
     userId: user.id,
     groupId: group.id,
     op: "parse",
@@ -358,6 +368,7 @@ async function handleGroupText(
       mode: "fund",
       step: "need_amount",
       draft: fundDraft,
+      aiRecordId,
     });
     const advanced =
       (await setStep(fundPending.id, computeNextStep("fund", fundDraft))) ??
@@ -393,6 +404,7 @@ async function handleGroupText(
     mode: "group_split",
     step: "need_amount",
     draft: splitDraft,
+    aiRecordId,
   });
   // If the flow will next ask for participants, pre-select everyone so the card
   // shows all members checked (user can untick).

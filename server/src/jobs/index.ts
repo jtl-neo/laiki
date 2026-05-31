@@ -4,6 +4,7 @@ import { runMonthlySettle } from "./monthlySettle.js";
 import { runChurnNudge } from "./churnNudge.js";
 import { runBudgetWarn } from "./budgetWarn.js";
 import { runRecurring } from "./recurringRunner.js";
+import { runPendingCleanup } from "./pendingCleanup.js";
 import { JOB_TZ as TZ } from "../lib/config.js";
 
 async function safeRun(name: string, fn: () => Promise<void>): Promise<void> {
@@ -61,6 +62,11 @@ export function startJobs(): void {
     },
     { timezone: TZ },
   );
+
+  // Pending entries GC: hourly, deletes expired draft rows.
+  cron.schedule("0 * * * *", () => {
+    void safeRun("pendingCleanup", runPendingCleanup);
+  });
 
   console.log(`[jobs] schedulers registered (TZ=${TZ})`);
 }
