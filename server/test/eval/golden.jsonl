@@ -1,0 +1,30 @@
+{"text": "今天吃午餐200", "expect": {"type": "expense", "total_amount": 200}}
+{"text": "早餐 65 現金", "expect": {"type": "expense", "total_amount": 65}}
+{"text": "搭高鐵去台中 700", "expect": {"type": "expense", "total_amount": 700}}
+{"text": "全聯買菜花了1,250元", "expect": {"type": "expense", "total_amount": 1250}}
+{"text": "昨天看電影320 富邦卡", "expect": {"type": "expense", "total_amount": 320}}
+{"text": "繳電話費 499", "expect": {"type": "expense", "total_amount": 499}}
+{"text": "買了一杯珍奶65塊", "expect": {"type": "expense", "total_amount": 65}}
+{"text": "停車費NT$120", "expect": {"type": "expense", "total_amount": 120}}
+{"text": "掛號費150", "expect": {"type": "expense", "total_amount": 150}}
+{"text": "房租 15000 LINE Pay", "expect": {"type": "expense", "total_amount": 15000}}
+{"text": "今天午餐和a和b吃麥當勞，我先出錢，a吃180，b吃200，總共花了500", "expect": {"type": "split_expense", "total_amount": 500, "debts": [{"name": "a", "amount": 180}, {"name": "b", "amount": 200}], "my_share": 120}}
+{"text": "和老王吃火鍋我先出 1200 平分", "expect": {"type": "split_expense", "total_amount": 1200, "debts": [{"name": "老王", "amount": 600}], "my_share": 600}}
+{"text": "跟a b c 喝咖啡 我先付400 大家平分", "expect": {"type": "split_expense", "total_amount": 400, "debts": [{"name": "a", "amount": 100}, {"name": "b", "amount": 100}, {"name": "c", "amount": 100}], "my_share": 100}}
+{"text": "電影票我先買 a欠我290", "expect": {"type": "split_expense", "debts": [{"name": "a", "amount": 290}]}}
+{"text": "晚餐900 我先墊 老王跟小美各300", "expect": {"type": "split_expense", "total_amount": 900, "debts": [{"name": "老王", "amount": 300}, {"name": "小美", "amount": 300}], "my_share": 300}}
+{"text": "計程車錢350我先出 b要給我175", "expect": {"type": "split_expense", "total_amount": 350, "debts": [{"name": "b", "amount": 175}], "my_share": 175}}
+{"text": "團購零食600 我先付 a拿200 b拿250 剩下我的", "expect": {"type": "split_expense", "total_amount": 600, "debts": [{"name": "a", "amount": 200}, {"name": "b", "amount": 250}], "my_share": 150}}
+{"text": "唱歌錢1600 四個人AA 我先刷卡 其他人是a b c", "expect": {"type": "split_expense", "total_amount": 1600, "debts": [{"name": "a", "amount": 400}, {"name": "b", "amount": 400}, {"name": "c", "amount": 400}], "my_share": 400}}
+{"text": "幫老王代買便當120 他要還我", "expect": {"type": "split_expense", "debts": [{"name": "老王", "amount": 120}]}}
+{"text": "露營裝備我先出3000 a跟b各出1000", "expect": {"type": "split_expense", "total_amount": 3000, "debts": [{"name": "a", "amount": 1000}, {"name": "b", "amount": 1000}], "my_share": 1000}}
+{"text": "用共同基金買了家裡用的衛生紙和洗衣精 450 元", "expect": {"type": "fund_expense", "total_amount": 450, "fund_name": "家裡用的東西"}}
+{"text": "公費買飲水機濾心 899", "expect": {"type": "fund_expense", "total_amount": 899}}
+{"text": "從家裡用的東西基金扣 250 買垃圾袋", "expect": {"type": "fund_expense", "total_amount": 250, "fund_name": "家裡用的東西"}}
+{"text": "基金支出 電費 1,830", "expect": {"type": "fund_expense", "total_amount": 1830}}
+{"text": "用共同基金訂了掃地機器人 12999", "expect": {"type": "fund_expense", "total_amount": 12999}}
+{"text": "收到薪水 52000", "expect": {"type": "income", "total_amount": 52000}}
+{"text": "退款入帳 380", "expect": {"type": "income", "total_amount": 380}}
+{"text": "轉帳給房東 15000", "expect": {"type": "transfer", "total_amount": 15000}}
+{"text": "提款 3000", "expect": {"type": "transfer", "total_amount": 3000}}
+{"text": "今天跟朋友去吃飯好開心", "expect": {"type": "expense", "total_amount": null}}
