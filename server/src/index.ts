@@ -67,7 +67,9 @@ app.use(
   }),
 );
 
-const VERSION = process.env.npm_package_version ?? "0.1.0";
+// Docker runs `node dist/index.js` directly, so npm_package_version is
+// absent there — keep the literal in sync with package.json.
+const VERSION = process.env.npm_package_version ?? "0.2.0";
 app.get("/api/health", (c) => c.json({ ok: true, version: VERSION }));
 app.get("/api/version", (c) => c.json({ version: VERSION }));
 
