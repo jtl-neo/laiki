@@ -103,6 +103,23 @@ describe("parseSimpleText", () => {
   it("leaves ambiguous multi-amount input for the provider", () => {
     expect(parseSimpleText("午餐200晚餐300")).toBeNull();
   });
+
+  // T-133: split/fund-intent phrases must go to the LLM, never the fast path.
+  it("bails on split-intent input (我先出)", () => {
+    expect(parseSimpleText("和a和b吃麥當勞我先出500")).toBeNull();
+  });
+
+  it("bails on split-intent input (平分)", () => {
+    expect(parseSimpleText("跟同事吃午餐600平分")).toBeNull();
+  });
+
+  it("bails on debt phrasing (欠)", () => {
+    expect(parseSimpleText("a欠我180")).toBeNull();
+  });
+
+  it("bails on fund phrasing (共同基金)", () => {
+    expect(parseSimpleText("用共同基金買衛生紙450")).toBeNull();
+  });
 });
 
 describe("parseText", () => {

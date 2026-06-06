@@ -1,25 +1,6 @@
 import { z } from "zod";
 import type { AIProvider, JsonSchema } from "./providers/types.js";
-
-const nullableStr = z.preprocess(
-  (v) => {
-    if (typeof v !== "string") return v;
-    const t = v.trim();
-    if (t === "" || t.toLowerCase() === "null" || t.toLowerCase() === "undefined") return null;
-    return t;
-  },
-  z.string().nullable().optional(),
-);
-
-const txDateStr = z.preprocess(
-  (v) => {
-    if (typeof v !== "string") return v;
-    const t = v.trim();
-    if (t === "" || t.toLowerCase() === "null" || t.toLowerCase() === "undefined") return null;
-    return /^\d{4}-\d{2}-\d{2}$/.test(t) ? t : null;
-  },
-  z.string().nullable().optional(),
-);
+import { nullableStr, txDateStr } from "./zodScalars.js";
 
 export const ParseResultSchema = z.object({
   amount: z.number().positive(),
@@ -49,6 +30,11 @@ type AccountHintRule = {
 };
 
 const SIMPLE_PARSE_CONFIDENCE = 0.92;
+
+// Split/fund-intent phrases need the LLM's unified parse (debt math, fund
+// matching); the deterministic fast path must never swallow them (T-133).
+const SPLIT_HINT_RE =
+  /我先出|先出錢|先墊|墊付|平分|均分|AA|各付|各出|分帳|欠我|我欠|欠款|共同基金|公費|基金/iu;
 
 const AMOUNT_RE =
   /(?:(?:NT\$|NTD|TWD|\$)\s*)?(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)(?:\s*(元|塊|圓))?/giu;
@@ -141,6 +127,7 @@ export async function parseText(provider: AIProvider, text: string): Promise<Par
 export function parseSimpleText(text: string, now = new Date()): ParseResult | null {
   const normalized = normalizeUserText(text);
   if (!normalized) return null;
+  if (SPLIT_HINT_RE.test(normalized)) return null;
 
   const amount = pickAmountCandidate(normalized);
   if (!amount) return null;
