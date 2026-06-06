@@ -28,6 +28,12 @@ export type DraftData = {
   participantsConfirmed?: boolean;
   /** Set once category is resolved/skipped so we never re-ask for it. */
   categoryResolved?: boolean;
+  /** Per-counterparty debts from the unified split parse (creditor = payer). */
+  debts?: { userId: string; amount: number }[];
+  /** Resolved payment_methods.id when the unified flow asked for one. */
+  paymentMethodId?: string | null;
+  /** Backend-derived missing fields driving the unified follow-up flow. */
+  missingFields?: string[];
 };
 
 export type Mode = "personal" | "group_split" | "fund";
@@ -319,6 +325,17 @@ export async function commitPending(pendingId: string): Promise<CommitResult> {
           ).toFixed(2),
         }));
         await tx.insert(transactionSplits).values(rows);
+      }
+
+      // Dual-write explicit debts when the unified split parse provided
+      // per-person amounts (creditor = payer). Same transaction → atomic.
+      if (mode === "group_split" && draft.debts && draft.debts.length > 0) {
+        const { insertDebtsForTransaction } = await import("./debts.js");
+        await insertDebtsForTransaction(tx, {
+          transactionId: inserted.id,
+          creditorId: row.userId,
+          debts: draft.debts,
+        });
       }
 
       // Apply the balance delta exactly once for the account touched.
