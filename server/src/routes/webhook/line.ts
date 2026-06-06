@@ -45,7 +45,8 @@ app.post("/", async (c) => {
   return c.json({ ok: true });
 });
 
-async function dispatch(event: webhook.Event): Promise<void> {
+/** Exported for the simulation test harness (test/sim/harness.ts). */
+export async function dispatch(event: webhook.Event): Promise<void> {
   logger.info({ event }, "webhook event");
   const src = event.source;
   if (src && (src.type === "group" || src.type === "room") && src.userId) {

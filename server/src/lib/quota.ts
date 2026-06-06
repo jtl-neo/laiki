@@ -67,6 +67,14 @@ function buildProviderChain(op: AiOp): ProviderConfig[] {
   return out;
 }
 
+// Test seam: simulation tests register a fake provider here (via
+// setFakeProvider) and set LAIKI_FAKE_AI=1 so handlers never hit a real
+// LLM while the rest of the quota/recordAi path stays real.
+let fakeProvider: AIProvider | null = null;
+export function setFakeProvider(provider: AIProvider | null): void {
+  fakeProvider = provider;
+}
+
 /**
  * Personal deployment: always returns allowed:true. Picks the provider chain by op
  * and wraps it in a FallbackProvider so transient errors fall through.
@@ -75,6 +83,15 @@ function buildProviderChain(op: AiOp): ProviderConfig[] {
  * for any per-user key selection or quota accounting.
  */
 export async function checkAndConsume(_userId: string, op: AiOp): Promise<QuotaResult> {
+  if (process.env.LAIKI_FAKE_AI === "1" && fakeProvider) {
+    return {
+      allowed: true,
+      provider: fakeProvider,
+      usingBYOK: false,
+      providerName: "fake",
+      model: "fake",
+    };
+  }
   const chain = buildProviderChain(op);
   const primary = chain[0];
   const providers = chain.length > 0 ? chain.map(makeProvider) : [];
