@@ -106,7 +106,8 @@ export const UNIFIED_JSON_SCHEMA: JsonSchema = {
 export const UNIFIED_SYSTEM_INSTRUCTION = `你是台灣記帳助理。將使用者的記帳訊息（一句中文或一張收據）轉成統一結構化 JSON。
 
 type 判斷：
-- 含「和/跟 某人…我先出/先墊/平分/AA/各付/欠」等多人分帳語意 → split_expense
+- 含「我先出/先墊/平分/AA/各付/欠/代買/代付/幫某人買…要還」等「別人欠我錢」語意 → split_expense
+- 注意：只是描述「和/跟某人一起吃飯、出去玩」而完全沒有墊付、欠款、分攤語意 → 一般 expense，不是 split_expense
 - 含「共同基金/公費/基金」且是支出 → fund_expense
 - 含「收到/入帳/薪水」→ income；含「轉帳/提款」→ transfer
 - 其他 → expense

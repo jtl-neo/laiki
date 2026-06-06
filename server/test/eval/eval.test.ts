@@ -103,8 +103,12 @@ describe.skipIf(!EVAL)("L4 eval: golden dataset vs real provider", () => {
       `debts:  ${splitOk}/${splitTotal} (${splitTotal ? ((splitOk / splitTotal) * 100).toFixed(1) : "—"}%)`,
       ...failures.map((f) => `  ✗ ${f}`),
     ].join("\n");
-    // eslint-disable-next-line no-console
-    console.log(`\n=== L4 EVAL REPORT ===\n${report}\n`);
+    // vitest swallows console.log on passing tests; write the report to a
+    // file (and raw stdout) so the numbers are always inspectable.
+    const { writeFileSync } = await import("node:fs");
+    const here = dirname(fileURLToPath(import.meta.url));
+    writeFileSync(join(here, "last-report.txt"), `${report}\n`);
+    process.stdout.write(`\n=== L4 EVAL REPORT ===\n${report}\n`);
 
     expect(typeOk / n).toBeGreaterThanOrEqual(0.95);
     expect(amountOk / n).toBeGreaterThanOrEqual(0.95);
