@@ -2,8 +2,10 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { and, eq, desc } from "drizzle-orm";
 import { db } from "../db/client.js";
-import { groups, groupMembers, users } from "../db/schema.js";
+import { groups, groupMembers, users, accounts } from "../db/schema.js";
 import { requireSession } from "../lib/auth.js";
+import { createDmGroup } from "../lib/myGroups.js";
+import { resolvePersonalGroupId } from "../lib/ensureDefaults.js";
 
 const app = new Hono<{ Variables: { userId: string } }>();
 
@@ -73,6 +75,13 @@ app.post("/", async (c) => {
   const parsed = CreateSchema.safeParse(body);
   if (!parsed.success) return c.json({ error: "bad request" }, 400);
 
+  // Fund groups need their dedicated 基金池 account — share the DM path.
+  if (parsed.data.type === "fund") {
+    const { groupId } = await createDmGroup(userId, parsed.data.name, "fund");
+    const [group] = await db.select().from(groups).where(eq(groups.id, groupId)).limit(1);
+    return c.json({ group });
+  }
+
   const [group] = await db
     .insert(groups)
     .values({
@@ -93,6 +102,48 @@ app.post("/", async (c) => {
   });
 
   return c.json({ group });
+});
+
+/**
+ * Delete a group (owner only). The personal ledger group cannot be
+ * deleted. Transactions/members cascade; a fund group's dedicated 基金池
+ * account is removed with it.
+ */
+app.delete("/:id", async (c) => {
+  const userId = c.get("userId");
+  const id = c.req.param("id");
+  if (!(await userIsOwner(userId, id))) return c.json({ error: "forbidden" }, 403);
+
+  const personalGroupId = await resolvePersonalGroupId(userId);
+  if (id === personalGroupId) {
+    return c.json({ error: "cannot delete personal group" }, 400);
+  }
+
+  const [group] = await db.select().from(groups).where(eq(groups.id, id)).limit(1);
+  if (!group) return c.json({ error: "not found" }, 404);
+
+  await db.transaction(async (tx) => {
+    const fundAccountId = group.fundAccountId;
+    await tx.delete(groups).where(eq(groups.id, id));
+    if (group.type === "fund" && fundAccountId) {
+      await tx.delete(accounts).where(eq(accounts.id, fundAccountId));
+    }
+  });
+  return c.json({ ok: true });
+});
+
+/** Leave a group (members only — the owner must delete instead). */
+app.post("/:id/leave", async (c) => {
+  const userId = c.get("userId");
+  const id = c.req.param("id");
+  if (!(await userInGroup(userId, id))) return c.json({ error: "forbidden" }, 403);
+  if (await userIsOwner(userId, id)) {
+    return c.json({ error: "owner cannot leave; delete the group instead" }, 400);
+  }
+  await db
+    .delete(groupMembers)
+    .where(and(eq(groupMembers.groupId, id), eq(groupMembers.userId, userId)));
+  return c.json({ ok: true });
 });
 
 app.get("/:id", async (c) => {

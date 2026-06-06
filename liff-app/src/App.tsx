@@ -15,6 +15,7 @@ import Budgets from "./screens/Budgets";
 import Recurring from "./screens/Recurring";
 import DataIO from "./screens/DataIO";
 import Overview from "./screens/Overview";
+import Groups from "./screens/Groups";
 import Help from "./screens/Help";
 import Terms from "./screens/Terms";
 import TabBar from "./components/TabBar";
@@ -33,6 +34,7 @@ export default function App() {
 
       <Route path="/transfer" element={<Transfer />} />
 
+      <Route path="/groups" element={<Groups />} />
       <Route path="/group/:groupId" element={<GroupDetail />} />
       <Route path="/group/:groupId/tx" element={<TxList />} />
       <Route path="/group/:groupId/tx/new" element={<TxNew />} />

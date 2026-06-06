@@ -15,7 +15,16 @@ export async function resolvePersonalGroupId(userId: string): Promise<string> {
   const [existing] = await db
     .select({ id: groups.id })
     .from(groups)
-    .where(and(eq(groups.ownerUserId, userId), isNull(groups.lineGroupId)))
+    .where(
+      and(
+        eq(groups.ownerUserId, userId),
+        isNull(groups.lineGroupId),
+        // DM-created ledgers are type split/fund; the personal group is the
+        // shared one ensureUserDefaults creates. Without this filter a
+        // user-created group could be mistaken for the personal ledger.
+        eq(groups.type, "shared"),
+      ),
+    )
     .orderBy(asc(groups.createdAt))
     .limit(1);
   if (existing) return existing.id;

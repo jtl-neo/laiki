@@ -3,6 +3,7 @@ import { Link, useLocation } from "react-router-dom";
 const tabs = [
   { label: "首頁", icon: "🏠", to: "/dashboard" },
   { label: "總覽", icon: "📊", to: "/overview" },
+  { label: "群組", icon: "👥", to: "/groups" },
   { label: "帳戶", icon: "💳", to: "/accounts" },
   { label: "設定", icon: "⚙", to: "/settings" },
 ];

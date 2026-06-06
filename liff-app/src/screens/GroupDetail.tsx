@@ -4,6 +4,7 @@ import { useState } from "react";
 import { api } from "../liff";
 import ErrorBox from "../components/ErrorBox";
 import Header from "../components/Header";
+import Confirm from "../components/Confirm";
 
 interface Member {
   userId: string;
@@ -44,6 +45,8 @@ export default function GroupDetail() {
   const [showSettle, setShowSettle] = useState(false);
   const [editing, setEditing] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmLeave, setConfirmLeave] = useState(false);
 
   const { data: groupData, isLoading, error, refetch } = useQuery({
     queryKey: ["group", groupId, "detail"],
@@ -67,6 +70,23 @@ export default function GroupDetail() {
       qc.invalidateQueries({ queryKey: ["group", groupId, "detail"] });
       qc.invalidateQueries({ queryKey: ["me"] });
       setEditing(false);
+    },
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: () => api<{ ok: boolean }>(`/v1/groups/${groupId}`, { method: "DELETE" }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["groups"] });
+      nav("/groups", { replace: true });
+    },
+  });
+
+  const leaveMut = useMutation({
+    mutationFn: () =>
+      api<{ ok: boolean }>(`/v1/groups/${groupId}/leave`, { method: "POST" }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["groups"] });
+      nav("/groups", { replace: true });
     },
   });
 
@@ -203,6 +223,56 @@ export default function GroupDetail() {
           結算
         </button>
       </div>
+
+      <section className="pt-2">
+        {isOwner ? (
+          <button
+            onClick={() => setConfirmDelete(true)}
+            disabled={deleteMut.isPending}
+            className="w-full px-4 py-2 border border-red-300 text-red-600 rounded-lg text-sm font-medium disabled:opacity-50"
+          >
+            刪除群組
+          </button>
+        ) : (
+          <button
+            onClick={() => setConfirmLeave(true)}
+            disabled={leaveMut.isPending}
+            className="w-full px-4 py-2 border border-red-300 text-red-600 rounded-lg text-sm font-medium disabled:opacity-50"
+          >
+            離開群組
+          </button>
+        )}
+        {(deleteMut.isError || leaveMut.isError) && (
+          <p className="text-xs text-red-600 mt-2">操作失敗，請稍後再試。</p>
+        )}
+      </section>
+
+      <Confirm
+        open={confirmDelete}
+        title="刪除群組？"
+        message={`「${groupData.group.name}」與其所有交易紀錄將永久刪除${
+          groupData.group.type === "fund" ? "，基金池帳戶也會一併移除" : ""
+        }。此操作無法復原。`}
+        confirmLabel="永久刪除"
+        danger
+        onConfirm={() => {
+          setConfirmDelete(false);
+          deleteMut.mutate();
+        }}
+        onCancel={() => setConfirmDelete(false)}
+      />
+      <Confirm
+        open={confirmLeave}
+        title="離開群組？"
+        message={`離開「${groupData.group.name}」後將看不到群組內容，需由擁有者重新加入。`}
+        confirmLabel="離開"
+        danger
+        onConfirm={() => {
+          setConfirmLeave(false);
+          leaveMut.mutate();
+        }}
+        onCancel={() => setConfirmLeave(false)}
+      />
 
       {showSettle && (
         <div

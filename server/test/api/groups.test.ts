@@ -86,4 +86,84 @@ describe.skipIf(!integrationAvailable)("groups API", () => {
     });
     expect(res.status).toBe(403);
   });
+
+  it("creates a fund group with its dedicated fund account", async () => {
+    const owner = await seedUser();
+    const res = await appRequest("POST", "/api/v1/groups/", {
+      cookie: owner.cookie,
+      body: { name: "家裡用的東西", type: "fund" },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { group: { type: string; fundAccountId: string | null } };
+    expect(body.group.type).toBe("fund");
+    expect(body.group.fundAccountId).toBeTruthy();
+  });
+
+  it("owner deletes a group; fund account goes with it", async () => {
+    const owner = await seedUser();
+    const create = await appRequest("POST", "/api/v1/groups/", {
+      cookie: owner.cookie,
+      body: { name: "短命基金", type: "fund" },
+    });
+    const { group } = (await create.json()) as {
+      group: { id: string; fundAccountId: string };
+    };
+
+    const del = await appRequest("DELETE", `/api/v1/groups/${group.id}`, {
+      cookie: owner.cookie,
+    });
+    expect(del.status).toBe(200);
+
+    const detail = await appRequest("GET", `/api/v1/groups/${group.id}`, {
+      cookie: owner.cookie,
+    });
+    expect(detail.status).toBe(403); // membership gone with the group
+
+    const accounts = await appRequest("GET", "/api/v1/accounts/", {
+      cookie: owner.cookie,
+    });
+    const aBody = (await accounts.json()) as { accounts: { id: string }[] };
+    expect(aBody.accounts.some((a) => a.id === group.fundAccountId)).toBe(false);
+  });
+
+  it("non-owner cannot delete; member can leave; owner cannot leave", async () => {
+    const owner = await seedUser();
+    const member = await seedUser();
+    const g = await seedGroup(owner.userId);
+    await appRequest("POST", `/api/v1/groups/${g.id}/members`, {
+      cookie: owner.cookie,
+      body: { userId: member.userId },
+    });
+
+    const delByMember = await appRequest("DELETE", `/api/v1/groups/${g.id}`, {
+      cookie: member.cookie,
+    });
+    expect(delByMember.status).toBe(403);
+
+    const ownerLeave = await appRequest("POST", `/api/v1/groups/${g.id}/leave`, {
+      cookie: owner.cookie,
+    });
+    expect(ownerLeave.status).toBe(400);
+
+    const memberLeave = await appRequest("POST", `/api/v1/groups/${g.id}/leave`, {
+      cookie: member.cookie,
+    });
+    expect(memberLeave.status).toBe(200);
+
+    const detail = await appRequest("GET", `/api/v1/groups/${g.id}`, {
+      cookie: member.cookie,
+    });
+    expect(detail.status).toBe(403);
+  });
+
+  it("personal group cannot be deleted", async () => {
+    const owner = await seedUser();
+    // ensureDefaults-style personal group: oldest owned group w/o lineGroupId.
+    const { resolvePersonalGroupId } = await import("../../src/lib/ensureDefaults.js");
+    const personalId = await resolvePersonalGroupId(owner.userId);
+    const del = await appRequest("DELETE", `/api/v1/groups/${personalId}`, {
+      cookie: owner.cookie,
+    });
+    expect(del.status).toBe(400);
+  });
 });
