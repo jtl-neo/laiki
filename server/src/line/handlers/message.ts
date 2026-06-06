@@ -220,18 +220,20 @@ async function tryClaimPin(
   }
 
   const { getOutstandingForUser } = await import("../../lib/debts.js");
+  const { buildClaimHistoryFlex } = await import("../flex/claimHistory.js");
+  const { notifyClaim } = await import("../../lib/notify.js");
   const outstanding = await getOutstandingForUser(result.userId);
-  const lines: string[] = ["🎉 歡迎加入！已成功認領歷史帳目。"];
-  for (const o of outstanding.iOwe) {
-    lines.push(`🔴 您欠 ${o.displayName ?? "對方"}：NT$${o.amount.toLocaleString("zh-TW")}`);
-  }
-  for (const o of outstanding.owedToMe) {
-    lines.push(`🟢 ${o.displayName ?? "對方"} 欠您：NT$${o.amount.toLocaleString("zh-TW")}`);
-  }
-  if (outstanding.iOwe.length === 0 && outstanding.owedToMe.length === 0) {
-    lines.push("目前沒有未結帳務。");
-  }
-  await replyText(replyToken, lines.join("\n"));
+  await replyMessages(replyToken, [
+    buildClaimHistoryFlex({
+      iOwe: outstanding.iOwe.map((o) => ({ displayName: o.displayName, amount: o.amount })),
+      owedToMe: outstanding.owedToMe.map((o) => ({
+        displayName: o.displayName,
+        amount: o.amount,
+      })),
+    }),
+  ]);
+  // Best-effort: tell the creator their friend just claimed (T-315).
+  void notifyClaim(result.creatorId, displayName);
   return true;
 }
 

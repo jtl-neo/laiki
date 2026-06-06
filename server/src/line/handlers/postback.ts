@@ -1,5 +1,5 @@
 import type { webhook } from "@line/bot-sdk";
-import { eq, sql } from "drizzle-orm";
+import { eq, sql, inArray } from "drizzle-orm";
 import { db } from "../../db/client.js";
 import { transactions, groups, users, accounts, accountMembers, groupMembers, userPreferences, settlements, pendingEntries } from "../../db/schema.js";
 import { and as dand } from "drizzle-orm";
@@ -756,7 +756,6 @@ async function handleDraftAction(
       await replyText(replyToken, "記帳失敗，請稍後再試或手動新增。");
       return;
     }
-    // Build a success confirmation reusing buildTxConfirmFlex.
     const [tx] = await db
       .select()
       .from(transactions)
@@ -771,6 +770,37 @@ async function handleDraftAction(
       ? await db.select().from(groups).where(eq(groups.id, groupId)).limit(1)
       : [];
     const amount = Number(tx?.amount ?? draft.amount ?? 0);
+
+    // Unified DM split: Bento 分帳成功卡 with per-person amounts (範例一).
+    if (mode === "group_split" && draft.debtsByName && draft.debtsByName.length > 0) {
+      const { buildSplitSuccessFlex } = await import("../flex/splitSuccess.js");
+      const debtorIds = (draft.debts ?? []).map((d) => d.userId);
+      const virtualById = new Map<string, boolean>();
+      if (debtorIds.length > 0) {
+        const rows = await db
+          .select({ id: users.id, isVirtual: users.isVirtual })
+          .from(users)
+          .where(inArray(users.id, debtorIds));
+        for (const row of rows) virtualById.set(row.id, row.isVirtual);
+      }
+      const debtSum = draft.debtsByName.reduce((s, d) => s + d.amount, 0);
+      const myShare = draft.myShare ?? Math.round((amount - debtSum) * 100) / 100;
+      await replyMessages(replyToken, [
+        buildSplitSuccessFlex({
+          description: draft.note,
+          totalAmount: amount,
+          accountName: acct?.name ?? "—",
+          myShare,
+          debtors: draft.debtsByName.map((d, i) => ({
+            name: d.name,
+            amount: d.amount,
+            isVirtual: virtualById.get(draft.debts?.[i]?.userId ?? "") ?? true,
+          })),
+        }),
+      ]);
+      return;
+    }
+
     await replyMessages(replyToken, [
       buildTxConfirmFlex({
         txId: r.txId,
@@ -783,6 +813,12 @@ async function handleDraftAction(
         liffEditUrl: `${LIFF_BASE}/tx/${r.txId}/edit`,
       }),
     ]);
+
+    // Fund commit: push the fund-change card to every bound member (範例三).
+    if (mode === "fund") {
+      const { notifyFundChange } = await import("../../lib/notify.js");
+      await notifyFundChange(r.txId).catch(() => {});
+    }
     return;
   }
 

@@ -67,7 +67,7 @@ export async function generateBindingCode(
 }
 
 export type ClaimResult =
-  | { ok: true; userId: string; merged: boolean }
+  | { ok: true; userId: string; merged: boolean; creatorId: string }
   | { ok: false; error: "not_found" | "expired" | "used" | "self_claim" | "already_claimed" };
 
 /**
@@ -144,7 +144,7 @@ export async function claimBindingCode(
           .where(eq(bindingCodes.code, code));
         await tx.delete(users).where(eq(users.id, shadowId));
       });
-      return { ok: true, userId: existingReal.id, merged: true };
+      return { ok: true, userId: existingReal.id, merged: true, creatorId: row.createdBy };
     }
 
     // Fresh claimer: awaken the shadow row in place.
@@ -163,7 +163,7 @@ export async function claimBindingCode(
         .set({ usedAt: new Date() })
         .where(eq(bindingCodes.code, code));
     });
-    return { ok: true, userId: shadow.id, merged: false };
+    return { ok: true, userId: shadow.id, merged: false, creatorId: row.createdBy };
   } catch (err) {
     logger.error({ err, code }, "claimBindingCode failed");
     throw err;
