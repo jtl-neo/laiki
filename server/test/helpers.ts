@@ -29,8 +29,10 @@ export async function getApp(): Promise<AppType> {
   const balances = (await import("../src/routes/balances.js")).default;
   const settle = (await import("../src/routes/settle.js")).default;
   const budgets = (await import("../src/routes/budgets.js")).default;
+  const liffFriends = (await import("../src/routes/liff/friends.js")).default;
 
   const app = new Hono();
+  app.route("/api/v1/liff", liffFriends);
   app.route("/api/v1/transactions", transactions);
   app.route("/api/v1/accounts", accountsRoute);
   app.route("/api/v1/transfers", transfers);
