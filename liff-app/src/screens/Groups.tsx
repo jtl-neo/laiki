@@ -26,7 +26,7 @@ export default function Groups() {
 
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ["groups"],
-    queryFn: () => api<{ groups: Group[] }>("/v1/groups/"),
+    queryFn: () => api<{ groups: Group[] }>("/v1/groups"),
   });
 
   const { data: meData } = useQuery({
@@ -36,7 +36,7 @@ export default function Groups() {
 
   const createMut = useMutation({
     mutationFn: (input: { name: string; type: "split" | "fund" }) =>
-      api<{ group: Group }>("/v1/groups/", {
+      api<{ group: Group }>("/v1/groups", {
         method: "POST",
         body: JSON.stringify(input),
       }),
