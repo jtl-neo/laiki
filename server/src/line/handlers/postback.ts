@@ -63,6 +63,7 @@ export async function handlePostback(event: webhook.PostbackEvent): Promise<void
     "select_all_members",
     "members_done",
     "ask_participants",
+    "ask_category",
     "set_category",
     "skip_category",
     "confirm_entry",
@@ -677,6 +678,14 @@ async function handleDraftAction(
       participantUserIds,
     });
     const updated = (await setStep(pendingId, "need_participants")) ?? p;
+    await replyForStep(replyToken, updated, p.mode as Mode);
+    return;
+  }
+
+  if (action === "ask_category") {
+    const p = await getPending(pendingId);
+    if (!p) return void (await replyText(replyToken, expiredMsg));
+    const updated = (await setStep(pendingId, "need_category")) ?? p;
     await replyForStep(replyToken, updated, p.mode as Mode);
     return;
   }
