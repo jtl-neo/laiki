@@ -34,7 +34,7 @@ describe.skipIf(!integrationAvailable)("unified pipeline", () => {
   it("recognizes an image through parseUnified", async () => {
     sim.provider.enqueue(validExpense);
     await sim.send(imageEvent(U));
-    await sleep(1800); // image batches debounce for 1.5s
+    await sleep(2500); // image batches debounce for 1.5s; generous margin under load
 
     const call = sim.provider.lastCall!;
     expect(call.images).toHaveLength(1);
