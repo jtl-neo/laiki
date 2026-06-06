@@ -522,6 +522,37 @@ async function tryPersonalCommand(
     await replyMessages(replyToken, [buildMonthlyFlex({ ...data, liffBase: LIFF_BASE })]);
     return true;
   }
+  const createGroup = /^建立(群組|基金)\s+(.+)$/.exec(t);
+  if (createGroup) {
+    const kind = createGroup[1] === "基金" ? ("fund" as const) : ("split" as const);
+    const name = createGroup[2]!.trim().slice(0, 30);
+    const { createDmGroup, listMemberCandidates } = await import("../../lib/myGroups.js");
+    const { buildGroupMemberManageFlex } = await import("../flex/myGroups.js");
+    const { groupId } = await createDmGroup(userId, name, kind);
+    const candidates = await listMemberCandidates(userId, groupId);
+    await replyMessages(replyToken, [
+      {
+        type: "text",
+        text: `${kind === "fund" ? "🏡 基金" : "📚 群組"}「${name}」建立完成！接著把好友加進來：`,
+      },
+      buildGroupMemberManageFlex({ groupId, groupName: name, candidates }),
+    ]);
+    return true;
+  }
+  if (/^(我的群組|群組|groups?)$/i.test(t)) {
+    const { listDmGroups } = await import("../../lib/myGroups.js");
+    const groupsList = await listDmGroups(userId);
+    if (groupsList.length === 0) {
+      await replyText(
+        replyToken,
+        "你還沒有群組。輸入「建立群組 名稱」建立分帳群組，或「建立基金 名稱」建立共同基金。",
+      );
+      return true;
+    }
+    const { buildMyGroupsFlex } = await import("../flex/myGroups.js");
+    await replyMessages(replyToken, [buildMyGroupsFlex(groupsList)]);
+    return true;
+  }
   if (/^(好友|管理好友|friends?)$/i.test(t)) {
     const { listFriendsWithOutstanding } = await import("../../lib/shadowAccount.js");
     const friends = await listFriendsWithOutstanding(userId);

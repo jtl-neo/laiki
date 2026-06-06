@@ -77,6 +77,38 @@ export async function handlePostback(event: webhook.PostbackEvent): Promise<void
     return;
   }
 
+  if (action === "mygroup_members" || action === "mygroup_toggle") {
+    const groupId = params.get("groupId");
+    const lineUserId = event.source?.userId;
+    if (!groupId || !lineUserId) return;
+    const [me] = await db.select().from(users).where(eq(users.lineUserId, lineUserId)).limit(1);
+    if (!me) return;
+    const { listMemberCandidates, toggleGroupMember } = await import("../../lib/myGroups.js");
+    const [g] = await db.select().from(groups).where(eq(groups.id, groupId)).limit(1);
+    if (!g || g.ownerUserId !== me.id) {
+      await replyText(replyToken, "只有群組擁有者可以管理成員。");
+      return;
+    }
+
+    if (action === "mygroup_toggle") {
+      const friendId = params.get("userId");
+      if (!friendId) return;
+      const result = await toggleGroupMember(me.id, groupId, friendId);
+      if (!result.ok) {
+        await replyText(replyToken, "無法調整這位成員。");
+        return;
+      }
+    }
+
+    // Both actions end by (re)rendering the manage card with fresh state.
+    const { buildGroupMemberManageFlex } = await import("../flex/myGroups.js");
+    const candidates = await listMemberCandidates(me.id, groupId);
+    await replyMessages(replyToken, [
+      buildGroupMemberManageFlex({ groupId, groupName: g.name, candidates }),
+    ]);
+    return;
+  }
+
   if (action === "friend_pin") {
     const friendId = params.get("friendId");
     const lineUserId = event.source?.userId;

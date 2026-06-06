@@ -204,6 +204,13 @@ export async function claimBindingCode(
             )`);
         await tx.delete(groupMembers).where(eq(groupMembers.userId, shadowId));
         await tx.delete(users).where(eq(users.id, shadowId));
+        // Keep the creator relationship: the merged friend must stay on the
+        // creator's roster (好友清單 / 群組成員候選), otherwise claiming
+        // would make them disappear from every picker.
+        await tx
+          .update(users)
+          .set({ createdBy: row.createdBy })
+          .where(and(eq(users.id, realId), isNull(users.createdBy)));
       });
       return { ok: true, userId: existingReal.id, merged: true, creatorId: row.createdBy };
     }
