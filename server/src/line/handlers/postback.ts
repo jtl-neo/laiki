@@ -77,6 +77,27 @@ export async function handlePostback(event: webhook.PostbackEvent): Promise<void
     return;
   }
 
+  if (action === "friend_pin") {
+    const friendId = params.get("friendId");
+    const lineUserId = event.source?.userId;
+    if (!friendId || !lineUserId) return;
+    const [me] = await db.select().from(users).where(eq(users.lineUserId, lineUserId)).limit(1);
+    if (!me) return;
+    const [friend] = await db.select().from(users).where(eq(users.id, friendId)).limit(1);
+    // Only the creator may generate a PIN, and only for a still-virtual shadow.
+    if (!friend || friend.createdBy !== me.id || !friend.isVirtual) {
+      await replyText(replyToken, "找不到這位好友，或對方已經綁定了。");
+      return;
+    }
+    const { generateBindingCode } = await import("../../lib/shadowAccount.js");
+    const pin = await generateBindingCode(friend.id, me.id);
+    await replyText(
+      replyToken,
+      `🔗 ${friend.displayName ?? "好友"} 的綁定碼：${pin}\n\n請對方加我為好友後，直接在對話框輸入這組數字，就能認領過去的帳目。24 小時內有效。`,
+    );
+    return;
+  }
+
   if (action === "group_type") {
     const groupId = params.get("groupId");
     const type = params.get("type");

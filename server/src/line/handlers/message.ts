@@ -522,6 +522,20 @@ async function tryPersonalCommand(
     await replyMessages(replyToken, [buildMonthlyFlex({ ...data, liffBase: LIFF_BASE })]);
     return true;
   }
+  if (/^(好友|管理好友|friends?)$/i.test(t)) {
+    const { listFriendsWithOutstanding } = await import("../../lib/shadowAccount.js");
+    const friends = await listFriendsWithOutstanding(userId);
+    if (friends.length === 0) {
+      await replyText(
+        replyToken,
+        "你還沒有記過任何好友的帳。試試「和小明吃飯我先出 500 他出250」，我會自動幫你建立好友！",
+      );
+      return true;
+    }
+    const { buildFriendListFlex } = await import("../flex/friendList.js");
+    await replyMessages(replyToken, [buildFriendListFlex(friends)]);
+    return true;
+  }
   return false;
 }
 

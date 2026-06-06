@@ -66,6 +66,40 @@ export async function generateBindingCode(
   throw new Error("generateBindingCode: exhausted attempts");
 }
 
+export type FriendEntry = {
+  userId: string;
+  displayName: string | null;
+  isVirtual: boolean;
+  /** Σ of PENDING debts this friend owes the creator. */
+  outstanding: number;
+};
+
+/**
+ * Everyone this user has recorded against (shadow or claimed), with their
+ * outstanding PENDING total. Drives the 管理好友 card.
+ */
+export async function listFriendsWithOutstanding(creatorId: string): Promise<FriendEntry[]> {
+  const rows = await db
+    .select({
+      userId: users.id,
+      displayName: users.displayName,
+      isVirtual: users.isVirtual,
+      outstanding: sql<string>`coalesce(sum(${debts.amount}) filter (
+        where ${debts.creditorId} = ${creatorId} and ${debts.status} = 'PENDING'
+      ), 0)`,
+    })
+    .from(users)
+    .leftJoin(debts, eq(debts.debtorId, users.id))
+    .where(eq(users.createdBy, creatorId))
+    .groupBy(users.id, users.displayName, users.isVirtual);
+  return rows.map((r) => ({
+    userId: r.userId,
+    displayName: r.displayName,
+    isVirtual: r.isVirtual,
+    outstanding: Number(r.outstanding),
+  }));
+}
+
 export type ClaimResult =
   | { ok: true; userId: string; merged: boolean; creatorId: string }
   | { ok: false; error: "not_found" | "expired" | "used" | "self_claim" | "already_claimed" };
