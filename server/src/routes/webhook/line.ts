@@ -7,10 +7,7 @@ import { handleUnfollow } from "../../line/handlers/unfollow.js";
 import { handleTextMessage } from "../../line/handlers/message.js";
 import { handleImageMessage } from "../../line/handlers/image.js";
 import { handlePostback } from "../../line/handlers/postback.js";
-import { handleJoin } from "../../line/handlers/join.js";
 import { handleLeave } from "../../line/handlers/leave.js";
-import { handleMemberJoined } from "../../line/handlers/memberJoined.js";
-import { registerGroupParticipant } from "../../line/registerParticipant.js";
 import { logger } from "../../lib/logger.js";
 import { incr } from "../metrics.js";
 
@@ -54,36 +51,14 @@ export async function dispatch(event: webhook.Event): Promise<void> {
     { type: event.type, sourceType: event.source?.type },
     "webhook event received",
   );
+  // 1對1 architecture (新想法): the bot lives in private chats only.
+  // Group/room events are never answered — the lone exception is `leave`,
+  // which is internal cleanup with no reply.
   const src = event.source;
-  if (src && (src.type === "group" || src.type === "room") && src.userId) {
-    const gid = src.type === "group" ? src.groupId : src.roomId;
-    try {
-      await registerGroupParticipant(src.userId, gid);
-    } catch (e) {
-      logger.warn({ err: e }, "registerGroupParticipant failed");
-    }
-
-    if (event.type === "message" && event.message.type === "text") {
-      const mention = (
-        event.message as {
-          mention?: {
-            mentionees?: { userId?: string; isSelf?: boolean; type?: string }[];
-          };
-        }
-      ).mention;
-      const mentioned = mention?.mentionees ?? [];
-      for (const m of mentioned) {
-        if (m.isSelf) continue;
-        if (m.type && m.type !== "user") continue;
-        if (!m.userId) continue;
-        if (m.userId === src.userId) continue;
-        try {
-          await registerGroupParticipant(m.userId, gid);
-        } catch (e) {
-          logger.warn({ err: e, mentionedUserId: m.userId }, "register mentioned user failed");
-        }
-      }
-    }
+  if (src && (src.type === "group" || src.type === "room")) {
+    if (event.type === "leave") return handleLeave(event);
+    logger.debug({ type: event.type }, "group event ignored (1-on-1 only)");
+    return;
   }
 
   switch (event.type) {
@@ -96,12 +71,6 @@ export async function dispatch(event: webhook.Event): Promise<void> {
       return handleTextMessage(event);
     case "postback":
       return handlePostback(event);
-    case "join":
-      return handleJoin(event);
-    case "leave":
-      return handleLeave(event);
-    case "memberJoined":
-      return handleMemberJoined(event);
     default:
       return;
   }
