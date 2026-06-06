@@ -21,7 +21,9 @@ export type MissingField =
 
 export const DebtItemSchema = z.object({
   name: z.string().min(1),
-  amount: z.number(),
+  // LLM output is untrusted: a negative/zero debt must die at validation,
+  // never reach validateSplitMath or the debts table.
+  amount: z.number().positive(),
 });
 export type DebtItem = z.infer<typeof DebtItemSchema>;
 

@@ -335,17 +335,27 @@ export async function commitPending(pendingId: string): Promise<CommitResult> {
       // parse) win over the legacy equal split; the payer absorbs
       // total − Σdebts as their own share.
       if (mode === "group_split" && draft.debts && draft.debts.length > 0) {
+        // Validate per-person amounts: every debt must be positive and the
+        // payer's residual share non-negative — corrupt drafts abort the
+        // whole transaction instead of writing garbage splits.
+        if (draft.debts.some((d) => !(d.amount > 0))) {
+          throw new Error("invalid_debt_amount");
+        }
         const debtSum = draft.debts.reduce((s, d) => s + d.amount, 0);
         const myShare =
           draft.myShare ?? Math.round((amount - debtSum) * 100) / 100;
+        if (myShare < 0) throw new Error("invalid_debt_distribution");
         const rows = [
-          { transactionId: inserted.id, userId: row.userId, amount: myShare.toFixed(2) },
+          // Drop the payer row only when their share is exactly zero.
+          ...(myShare > 0
+            ? [{ transactionId: inserted.id, userId: row.userId, amount: myShare.toFixed(2) }]
+            : []),
           ...draft.debts.map((d) => ({
             transactionId: inserted.id,
             userId: d.userId,
             amount: d.amount.toFixed(2),
           })),
-        ].filter((r) => Number(r.amount) > 0 || r.userId !== row.userId);
+        ];
         await tx.insert(transactionSplits).values(rows);
       } else if (mode === "group_split" && draft.participantUserIds.length > 0) {
         // Legacy equal split, last participant absorbs remainder.

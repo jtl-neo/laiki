@@ -73,7 +73,7 @@ export async function handlePostback(event: webhook.PostbackEvent): Promise<void
   // Only treat as a draft action when a pendingId is present, so the legacy
   // txId-keyed actions (set_amount/set_category on a committed tx) still work.
   if (action && DRAFT_ACTIONS.has(action) && params.get("pendingId")) {
-    await handleDraftAction(action, params, replyToken);
+    await handleDraftAction(action, params, replyToken, event.source?.userId ?? null);
     return;
   }
 
@@ -604,10 +604,31 @@ async function handleDraftAction(
   action: string,
   params: URLSearchParams,
   replyToken: string,
+  senderLineUserId: string | null,
 ): Promise<void> {
   const pendingId = params.get("pendingId");
   if (!pendingId) return;
   const expiredMsg = "這筆已逾時或已處理，請重新輸入";
+
+  // Authorization: a DM-scoped pending (lineGroupId null) may only be
+  // mutated by its owner; group-scoped pendings stay open to group members
+  // (shared draft cards are a feature there). pendingIds are random UUIDs,
+  // but replayed postback data must still never cross users.
+  {
+    const p = await getPending(pendingId);
+    if (p && p.lineGroupId === null) {
+      if (!senderLineUserId) return;
+      const [sender] = await db
+        .select({ id: users.id })
+        .from(users)
+        .where(eq(users.lineUserId, senderLineUserId))
+        .limit(1);
+      if (!sender || sender.id !== p.userId) {
+        await replyText(replyToken, "這筆草稿不是你的喔");
+        return;
+      }
+    }
+  }
 
   // Helper: re-resolve next step + reply for the (possibly mutated) row.
   const advance = async (): Promise<void> => {
@@ -717,6 +738,21 @@ async function handleDraftAction(
     if (!p) return void (await replyText(replyToken, expiredMsg));
     const groupId = params.get("groupId");
     if (!groupId) return void (await replyText(replyToken, "基金無效"));
+    // The chosen group must be a fund the pending owner belongs to —
+    // postback data is client-controlled.
+    const [membership] = await db
+      .select({ groupId: groupMembers.groupId })
+      .from(groupMembers)
+      .innerJoin(groups, eq(groups.id, groupMembers.groupId))
+      .where(
+        dand(
+          eq(groupMembers.groupId, groupId),
+          eq(groupMembers.userId, p.userId),
+          eq(groups.type, "fund"),
+        ),
+      )
+      .limit(1);
+    if (!membership) return void (await replyText(replyToken, "基金無效"));
     // Bind the pending row to the chosen fund group and mark it resolved.
     await db
       .update(pendingEntries)

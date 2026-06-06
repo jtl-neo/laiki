@@ -1,5 +1,5 @@
 import { randomInt } from "node:crypto";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { bindingCodes, debts, groupMembers, transactions, transactionSplits, users } from "../db/schema.js";
 import { logger } from "./logger.js";
@@ -48,6 +48,12 @@ export async function generateBindingCode(
   virtualUserId: string,
   creatorUserId: string,
 ): Promise<string> {
+  // One live code per shadow: regenerating supersedes (deletes) any unused
+  // codes, so spamming the button never grows the guessable-code pool.
+  await db
+    .delete(bindingCodes)
+    .where(and(eq(bindingCodes.virtualUserId, virtualUserId), isNull(bindingCodes.usedAt)));
+
   for (let attempt = 0; attempt < CODE_GEN_ATTEMPTS; attempt++) {
     const code = String(randomInt(100000, 1000000));
     try {
