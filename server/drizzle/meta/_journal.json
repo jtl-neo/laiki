@@ -71,6 +71,13 @@
       "when": 1780330725925,
       "tag": "0009_pending_entries",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1780756497255,
+      "tag": "0010_giant_ronan",
+      "breakpoints": true
     }
   ]
 }

@@ -109,6 +109,68 @@ export async function seedGroup(
   return { id: g.id };
 }
 
+/** Insert a virtual (shadow) user: no LINE id, created by `creatorId`. */
+export async function seedShadow(
+  creatorId: string,
+  displayName: string,
+): Promise<{ id: string }> {
+  const db = await getDb();
+  const [u] = await db
+    .insert(users)
+    .values({ lineUserId: null, displayName, isVirtual: true, createdBy: creatorId })
+    .returning();
+  if (!u) throw new Error("seedShadow: insert failed");
+  return { id: u.id };
+}
+
+export async function seedPaymentMethod(
+  userId: string,
+  name: string,
+  type: "CASH" | "CREDIT" | "FUND" = "CASH",
+): Promise<{ id: string }> {
+  const db = await getDb();
+  const { paymentMethods } = await import("../src/db/schema.js");
+  const [pm] = await db.insert(paymentMethods).values({ userId, name, type }).returning();
+  if (!pm) throw new Error("seedPaymentMethod: insert failed");
+  return { id: pm.id };
+}
+
+/** Fund group with its dedicated fund account and the given members. */
+export async function seedFundGroup(
+  ownerId: string,
+  name: string,
+  balance: number,
+  memberIds: string[] = [],
+): Promise<{ groupId: string; fundAccountId: string }> {
+  const db = await getDb();
+  const [account] = await db
+    .insert(accounts)
+    .values({
+      userId: ownerId,
+      name: `${name} 基金`,
+      type: "cash",
+      initialBalance: balance.toFixed(2),
+      balance: balance.toFixed(2),
+    })
+    .returning();
+  if (!account) throw new Error("seedFundGroup: account insert failed");
+  const [g] = await db
+    .insert(groups)
+    .values({ name, type: "fund", ownerUserId: ownerId, fundAccountId: account.id })
+    .returning();
+  if (!g) throw new Error("seedFundGroup: group insert failed");
+  const members = [ownerId, ...memberIds];
+  await db.insert(groupMembers).values(
+    members.map((uid, i) => ({
+      groupId: g.id,
+      userId: uid,
+      role: (i === 0 ? "owner" : "member") as "owner" | "member",
+      joinedVia: "manual" as const,
+    })),
+  );
+  return { groupId: g.id, fundAccountId: account.id };
+}
+
 export type AppRequestOpts = {
   cookie?: string;
   body?: unknown;
@@ -138,6 +200,11 @@ export async function appRequest(
 // TRUNCATE all data tables. Order doesn't matter with CASCADE.
 const TABLES = [
   "sessions",
+  "debts",
+  "binding_codes",
+  "payment_methods",
+  "pending_entries",
+  "ai_records",
   "transaction_splits",
   "transactions",
   "settlements",

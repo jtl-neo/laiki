@@ -13,6 +13,7 @@ import {
   unique,
   boolean,
   index,
+  type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 
 const bytea = customType<{ data: Buffer; default: false }>({
@@ -58,14 +59,22 @@ export const recurringFrequencyEnum = pgEnum("recurring_frequency", [
   "monthly",
   "yearly",
 ]);
+export const paymentMethodTypeEnum = pgEnum("payment_method_type", ["CASH", "CREDIT", "FUND"]);
+export const debtStatusEnum = pgEnum("debt_status", ["PENDING", "SETTLED"]);
 
 export const users = pgTable("users", {
   id: uuid("id").primaryKey().defaultRandom(),
-  lineUserId: text("line_user_id").notNull().unique(),
+  // NULL for shadow (virtual) accounts; uniqueness enforced by a partial
+  // unique index (WHERE line_user_id IS NOT NULL) added in migration 0010.
+  lineUserId: text("line_user_id"),
   displayName: text("display_name"),
   pictureUrl: text("picture_url"),
   email: text("email"),
   locale: text("locale").notNull().default("zh-TW"),
+  isVirtual: boolean("is_virtual").notNull().default(false),
+  createdBy: uuid("created_by").references((): AnyPgColumn => users.id, {
+    onDelete: "set null",
+  }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
@@ -299,6 +308,46 @@ export const pendingEntries = pgTable(
     byExpiry: index("pending_entries_expires_idx").on(t.expiresAt),
   }),
 );
+
+export const paymentMethods = pgTable("payment_methods", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  type: paymentMethodTypeEnum("type").notNull().default("CASH"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const debts = pgTable(
+  "debts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    transactionId: uuid("transaction_id").notNull().references(() => transactions.id, {
+      onDelete: "cascade",
+    }),
+    creditorId: uuid("creditor_id").notNull().references(() => users.id, {
+      onDelete: "restrict",
+    }),
+    debtorId: uuid("debtor_id").notNull().references(() => users.id, { onDelete: "restrict" }),
+    amount: numeric("amount", { precision: 18, scale: 2 }).notNull(),
+    status: debtStatusEnum("status").notNull().default("PENDING"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    byDebtor: index("debts_debtor_idx").on(t.debtorId),
+    byCreditor: index("debts_creditor_idx").on(t.creditorId),
+  }),
+);
+
+export const bindingCodes = pgTable("binding_codes", {
+  code: text("code").primaryKey(),
+  virtualUserId: uuid("virtual_user_id").notNull().references(() => users.id, {
+    onDelete: "cascade",
+  }),
+  createdBy: uuid("created_by").notNull().references(() => users.id, { onDelete: "cascade" }),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  usedAt: timestamp("used_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
 
 export type User = typeof users.$inferSelect;
 export type NewUser = typeof users.$inferInsert;

@@ -9,7 +9,10 @@ async function main() {
       displayName: "Dev User",
       locale: "zh-TW",
     })
-    .onConflictDoNothing({ target: users.lineUserId })
+    // No explicit conflict target: line_user_id uniqueness is now a partial
+    // index (WHERE line_user_id IS NOT NULL), which plain column-target
+    // inference can't use as an arbiter.
+    .onConflictDoNothing()
     .returning();
 
   if (!u) {
