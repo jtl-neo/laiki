@@ -79,31 +79,38 @@ app.post("/:id/settle/record-paid", async (c) => {
 
   const { fromUserId, toUserId, fromAccountId, toAccountId, amount, note } = parsed.data;
 
-  if (fromAccountId) {
-    if (!(await userOwnsAccount(fromUserId, fromAccountId))) {
-      return c.json({ error: "forbidden: fromAccount" }, 403);
-    }
-    await applyDelta(fromAccountId, -amount);
-  }
-  if (toAccountId) {
-    if (!(await userOwnsAccount(toUserId, toAccountId))) {
-      return c.json({ error: "forbidden: toAccount" }, 403);
-    }
-    await applyDelta(toAccountId, amount);
+  // The caller must be a PARTY to the settlement — otherwise any group
+  // member could record payments between two other members and mutate
+  // their account balances.
+  if (userId !== fromUserId && userId !== toUserId) {
+    return c.json({ error: "forbidden: not a party" }, 403);
   }
 
-  const [settlement] = await db
-    .insert(settlements)
-    .values({
-      groupId: id,
-      fromUserId,
-      toUserId,
-      fromAccountId: fromAccountId ?? null,
-      toAccountId: toAccountId ?? null,
-      amount: amount.toFixed(2),
-      note: note ?? null,
-    })
-    .returning();
+  if (fromAccountId && !(await userOwnsAccount(fromUserId, fromAccountId))) {
+    return c.json({ error: "forbidden: fromAccount" }, 403);
+  }
+  if (toAccountId && !(await userOwnsAccount(toUserId, toAccountId))) {
+    return c.json({ error: "forbidden: toAccount" }, 403);
+  }
+
+  // Deltas + settlement row commit or roll back together.
+  const settlement = await db.transaction(async (tx) => {
+    if (fromAccountId) await applyDelta(fromAccountId, -amount, tx);
+    if (toAccountId) await applyDelta(toAccountId, amount, tx);
+    const [row] = await tx
+      .insert(settlements)
+      .values({
+        groupId: id,
+        fromUserId,
+        toUserId,
+        fromAccountId: fromAccountId ?? null,
+        toAccountId: toAccountId ?? null,
+        amount: amount.toFixed(2),
+        note: note ?? null,
+      })
+      .returning();
+    return row;
+  });
 
   incr("settle_total");
   return c.json({ settlement });

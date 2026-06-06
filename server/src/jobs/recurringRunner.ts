@@ -19,32 +19,41 @@ export async function runRecurring(): Promise<void> {
       let safety = 0;
       while (runDate <= today && safety < 50) {
         if (r.endDate && runDate > r.endDate) break;
-        await db.insert(transactions).values({
-          groupId: r.groupId,
-          accountId: r.accountId,
-          amount: r.amount,
-          txDate: runDate,
-          paidByUserId: r.userId,
-          category: r.category,
-          kind: r.kind,
-          note: r.note ?? "定期定額",
-          source: "manual",
+        const next = ymd(
+          computeNextRunDate(parseYmd(runDate), r.frequency as Frequency, r.anchorDay),
+        );
+        // Each occurrence is atomic: tx insert + balance delta + nextRunDate
+        // advance commit together, so a crash mid-loop can never replay an
+        // occurrence that already posted (old code advanced nextRunDate only
+        // after the whole loop).
+        await db.transaction(async (dtx) => {
+          await dtx.insert(transactions).values({
+            groupId: r.groupId,
+            accountId: r.accountId,
+            amount: r.amount,
+            txDate: runDate,
+            paidByUserId: r.userId,
+            category: r.category,
+            kind: r.kind,
+            note: r.note ?? "定期定額",
+            source: "manual",
+          });
+          await applyDelta(r.accountId, signedAmount(r.kind, Number(r.amount)), dtx);
+          await dtx
+            .update(recurringTransactions)
+            .set({ lastRunDate: today, nextRunDate: next, updatedAt: new Date() })
+            .where(eq(recurringTransactions.id, r.id));
         });
-        await applyDelta(r.accountId, signedAmount(r.kind, Number(r.amount)));
-        const next = computeNextRunDate(parseYmd(runDate), r.frequency as Frequency, r.anchorDay);
-        runDate = ymd(next);
+        runDate = next;
         safety++;
       }
       const deactivate = r.endDate ? runDate > r.endDate : false;
-      await db
-        .update(recurringTransactions)
-        .set({
-          lastRunDate: today,
-          nextRunDate: runDate,
-          active: deactivate ? false : r.active,
-          updatedAt: new Date(),
-        })
-        .where(eq(recurringTransactions.id, r.id));
+      if (deactivate) {
+        await db
+          .update(recurringTransactions)
+          .set({ active: false, updatedAt: new Date() })
+          .where(eq(recurringTransactions.id, r.id));
+      }
     } catch (err) {
       console.error(`[recurring] failed for ${r.id}:`, err);
     }

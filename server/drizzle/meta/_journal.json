@@ -78,6 +78,13 @@
       "when": 1780756497255,
       "tag": "0010_giant_ronan",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1780757800000,
+      "tag": "0011_shadow_alias_unique",
+      "breakpoints": true
     }
   ]
 }

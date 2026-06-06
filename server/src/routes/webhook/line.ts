@@ -47,7 +47,13 @@ app.post("/", async (c) => {
 
 /** Exported for the simulation test harness (test/sim/harness.ts). */
 export async function dispatch(event: webhook.Event): Promise<void> {
-  logger.info({ event }, "webhook event");
+  // Full events carry message text + user ids (PII) → debug only;
+  // info level keeps just the routing metadata.
+  logger.debug({ event }, "webhook event");
+  logger.info(
+    { type: event.type, sourceType: event.source?.type },
+    "webhook event received",
+  );
   const src = event.source;
   if (src && (src.type === "group" || src.type === "room") && src.userId) {
     const gid = src.type === "group" ? src.groupId : src.roomId;

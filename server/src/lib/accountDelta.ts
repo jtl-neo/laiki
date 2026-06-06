@@ -11,6 +11,9 @@ export async function applyDelta(
   delta: number,
   tx: DbOrTx = db,
 ): Promise<void> {
+  // A NaN/Infinity delta (upstream parse bug) must abort loudly, never
+  // reach SQL as a garbage string.
+  if (!Number.isFinite(delta)) throw new Error(`applyDelta: non-finite delta ${delta}`);
   await tx
     .update(accounts)
     .set({

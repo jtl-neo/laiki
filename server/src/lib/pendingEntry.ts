@@ -254,26 +254,22 @@ type CommitResult = { txId: string } | { error: string };
  * Wrapped in db.transaction so a failure never leaves a half-written balance.
  */
 export async function commitPending(pendingId: string): Promise<CommitResult> {
-  let pending: PendingRow | null;
-  try {
-    pending = await getPending(pendingId);
-  } catch (err) {
-    logger.error({ err, pendingId }, "commitPending: failed to load pending");
-    return { error: "load_failed" };
-  }
-  if (!pending) return { error: "not_found_or_expired" };
-
-  const row = pending;
-  const mode = row.mode as Mode;
-  const draft = row.draft as DraftData;
-  const amount = draft.amount;
-
-  if (amount === null || amount <= 0) return { error: "missing_amount" };
-
-  const txDate = draft.txDate ?? new Date().toISOString().slice(0, 10);
-
   try {
     const txId = await db.transaction(async (tx) => {
+      // Atomic claim: deleting the pending row INSIDE the transaction is the
+      // lock. A concurrent confirm gets an empty RETURNING and bails, so the
+      // same pending can never commit (and apply its balance delta) twice.
+      const [row] = await tx
+        .delete(pendingEntries)
+        .where(and(eq(pendingEntries.id, pendingId), gt(pendingEntries.expiresAt, new Date())))
+        .returning();
+      if (!row) throw new Error("not_found_or_expired");
+
+      const mode = row.mode as Mode;
+      const draft = row.draft as DraftData;
+      const amount = draft.amount;
+      if (amount === null || amount <= 0) throw new Error("missing_amount");
+      const txDate = draft.txDate ?? new Date().toISOString().slice(0, 10);
       // Resolve the account actually debited/credited and the owning group.
       let accountId: string;
       let groupId: string;
@@ -406,10 +402,13 @@ export async function commitPending(pendingId: string): Promise<CommitResult> {
       return inserted.id;
     });
 
-    await deletePending(pendingId);
     return { txId };
   } catch (err) {
-    logger.error({ err, pendingId }, "commitPending: failed to commit");
-    return { error: err instanceof Error ? err.message : "commit_failed" };
+    const message = err instanceof Error ? err.message : "commit_failed";
+    // Expected claim/validation outcomes are not logged as errors.
+    if (message !== "not_found_or_expired" && message !== "missing_amount") {
+      logger.error({ err, pendingId }, "commitPending: failed to commit");
+    }
+    return { error: message };
   }
 }

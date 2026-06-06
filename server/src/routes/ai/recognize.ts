@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { requireSession } from "../../lib/auth.js";
 import { checkAndConsume } from "../../lib/quota.js";
+import { logger } from "../../lib/logger.js";
 import { recognizeReceipt } from "../../ai/recognizeReceipt.js";
 
 const app = new Hono<{ Variables: { userId: string } }>();
@@ -38,7 +39,7 @@ app.post("/", async (c) => {
     const result = await recognizeReceipt(quota.provider, images);
     return c.json({ result, usingBYOK: quota.usingBYOK });
   } catch (e) {
-    console.error("ai/recognize failed:", e);
+    logger.warn({ err: e instanceof Error ? e.message : String(e) }, "ai/recognize failed");
     return c.json({ error: "recognize_failed" }, 502);
   }
 });

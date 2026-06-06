@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { requireSession } from "../../lib/auth.js";
 import { checkAndConsume } from "../../lib/quota.js";
+import { logger } from "../../lib/logger.js";
 import { parseText } from "../../ai/parseTransaction.js";
 
 const app = new Hono<{ Variables: { userId: string } }>();
@@ -22,7 +23,7 @@ app.post("/parse", async (c) => {
     const result = await parseText(quota.provider, parsed.data.text);
     return c.json({ result, usingBYOK: quota.usingBYOK });
   } catch (e) {
-    console.error("ai/parse failed:", e);
+    logger.warn({ err: e instanceof Error ? e.message : String(e) }, "ai/parse failed");
     return c.json({ error: "parse_failed" }, 502);
   }
 });

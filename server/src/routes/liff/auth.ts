@@ -14,6 +14,7 @@ const BodySchema = z.object({ idToken: z.string().min(10) });
 
 interface VerifyResponse {
   sub: string;
+  aud?: string;
   name?: string;
   picture?: string;
   email?: string;
@@ -30,7 +31,11 @@ async function verifyIdToken(idToken: string): Promise<VerifyResponse | null> {
     body: params.toString(),
   });
   if (!res.ok) return null;
-  return (await res.json()) as VerifyResponse;
+  const verified = (await res.json()) as VerifyResponse;
+  // LINE's verify endpoint already rejects audience mismatches for the
+  // client_id we pass, but double-check the echoed aud as defense in depth.
+  if (verified.aud && verified.aud !== channelId) return null;
+  return verified;
 }
 
 app.post("/auth", async (c) => {

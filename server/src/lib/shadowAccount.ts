@@ -27,6 +27,9 @@ export async function resolveOrCreateShadow(
     .limit(1);
   if (existing) return existing.id;
 
+  // Concurrent same-alias resolves race the check above; the partial
+  // unique index on (created_by, display_name) makes the second insert a
+  // no-op, after which the re-select finds the winner's row.
   const [created] = await db
     .insert(users)
     .values({
@@ -35,9 +38,17 @@ export async function resolveOrCreateShadow(
       isVirtual: true,
       createdBy: creatorUserId,
     })
+    .onConflictDoNothing()
     .returning({ id: users.id });
-  if (!created) throw new Error("resolveOrCreateShadow: insert failed");
-  return created.id;
+  if (created) return created.id;
+
+  const [winner] = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(and(eq(users.createdBy, creatorUserId), eq(users.displayName, name)))
+    .limit(1);
+  if (!winner) throw new Error("resolveOrCreateShadow: insert failed");
+  return winner.id;
 }
 
 /**
@@ -48,20 +59,21 @@ export async function generateBindingCode(
   virtualUserId: string,
   creatorUserId: string,
 ): Promise<string> {
-  // One live code per shadow: regenerating supersedes (deletes) any unused
-  // codes, so spamming the button never grows the guessable-code pool.
-  await db
-    .delete(bindingCodes)
-    .where(and(eq(bindingCodes.virtualUserId, virtualUserId), isNull(bindingCodes.usedAt)));
-
   for (let attempt = 0; attempt < CODE_GEN_ATTEMPTS; attempt++) {
     const code = String(randomInt(100000, 1000000));
     try {
-      await db.insert(bindingCodes).values({
-        code,
-        virtualUserId,
-        createdBy: creatorUserId,
-        expiresAt: new Date(Date.now() + CODE_TTL_MS),
+      // Supersede + insert atomically: one live code per shadow even when
+      // the button is double-tapped concurrently.
+      await db.transaction(async (tx) => {
+        await tx
+          .delete(bindingCodes)
+          .where(and(eq(bindingCodes.virtualUserId, virtualUserId), isNull(bindingCodes.usedAt)));
+        await tx.insert(bindingCodes).values({
+          code,
+          virtualUserId,
+          createdBy: creatorUserId,
+          expiresAt: new Date(Date.now() + CODE_TTL_MS),
+        });
       });
       return code;
     } catch (err) {
@@ -146,9 +158,22 @@ export async function claimBindingCode(
     .limit(1);
 
   try {
+    // Atomic claim: conditionally marking the code used INSIDE the
+    // transaction is the lock. A concurrent claim of the same code gets an
+    // empty RETURNING, throws, and rolls back — only one claimer ever wins.
+    const claimCode = async (tx: Parameters<Parameters<typeof db.transaction>[0]>[0]) => {
+      const [claimed] = await tx
+        .update(bindingCodes)
+        .set({ usedAt: new Date() })
+        .where(and(eq(bindingCodes.code, code), isNull(bindingCodes.usedAt)))
+        .returning();
+      if (!claimed) throw new ClaimRaceError();
+    };
+
     if (existingReal) {
       // Merge shadow → existing real user inside one transaction.
       await db.transaction(async (tx) => {
+        await claimCode(tx);
         const shadowId = shadow.id;
         const realId = existingReal.id;
         await tx.update(debts).set({ debtorId: realId }).where(eq(debts.debtorId, shadowId));
@@ -178,10 +203,6 @@ export async function claimBindingCode(
               WHERE other.group_id = gm.group_id AND other.user_id = ${realId}
             )`);
         await tx.delete(groupMembers).where(eq(groupMembers.userId, shadowId));
-        await tx
-          .update(bindingCodes)
-          .set({ usedAt: new Date() })
-          .where(eq(bindingCodes.code, code));
         await tx.delete(users).where(eq(users.id, shadowId));
       });
       return { ok: true, userId: existingReal.id, merged: true, creatorId: row.createdBy };
@@ -189,6 +210,7 @@ export async function claimBindingCode(
 
     // Fresh claimer: awaken the shadow row in place.
     await db.transaction(async (tx) => {
+      await claimCode(tx);
       await tx
         .update(users)
         .set({
@@ -198,14 +220,18 @@ export async function claimBindingCode(
           updatedAt: new Date(),
         })
         .where(eq(users.id, shadow.id));
-      await tx
-        .update(bindingCodes)
-        .set({ usedAt: new Date() })
-        .where(eq(bindingCodes.code, code));
     });
     return { ok: true, userId: shadow.id, merged: false, creatorId: row.createdBy };
   } catch (err) {
+    if (err instanceof ClaimRaceError) return { ok: false, error: "used" };
     logger.error({ err, code }, "claimBindingCode failed");
     throw err;
+  }
+}
+
+/** Internal: lost the atomic code-claim race (someone else used it first). */
+class ClaimRaceError extends Error {
+  constructor() {
+    super("binding_code_claim_race");
   }
 }

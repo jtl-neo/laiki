@@ -51,47 +51,54 @@ app.post("/", async (c) => {
     const date = txDate ?? new Date().toISOString().slice(0, 10);
     const amountStr = amount.toFixed(2);
 
-    const [tx1] = await db
-      .insert(transactions)
-      .values({
-        groupId,
-        accountId: fromAccountId,
-        amount: amountStr,
-        txDate: date,
-        paidByUserId: userId,
-        kind: "transfer",
-        note,
-        source: "liff",
-      })
-      .returning();
-    if (!tx1) return c.json({ error: "insert failed" }, 500);
+    // Both legs, the pair linkage and both balance deltas are atomic — a
+    // partial failure must never leave one account moved or a dangling
+    // transferPairId.
+    const { from, to } = await db.transaction(async (dtx) => {
+      const [tx1] = await dtx
+        .insert(transactions)
+        .values({
+          groupId,
+          accountId: fromAccountId,
+          amount: amountStr,
+          txDate: date,
+          paidByUserId: userId,
+          kind: "transfer",
+          note,
+          source: "liff",
+        })
+        .returning();
+      if (!tx1) throw new Error("insert failed");
 
-    const [tx2] = await db
-      .insert(transactions)
-      .values({
-        groupId,
-        accountId: toAccountId,
-        amount: amountStr,
-        txDate: date,
-        paidByUserId: userId,
-        kind: "transfer",
-        note,
-        source: "liff",
-        transferPairId: tx1.id,
-      })
-      .returning();
-    if (!tx2) return c.json({ error: "insert failed" }, 500);
+      const [tx2] = await dtx
+        .insert(transactions)
+        .values({
+          groupId,
+          accountId: toAccountId,
+          amount: amountStr,
+          txDate: date,
+          paidByUserId: userId,
+          kind: "transfer",
+          note,
+          source: "liff",
+          transferPairId: tx1.id,
+        })
+        .returning();
+      if (!tx2) throw new Error("insert failed");
 
-    const [tx1Updated] = await db
-      .update(transactions)
-      .set({ transferPairId: tx2.id, updatedAt: new Date() })
-      .where(eq(transactions.id, tx1.id))
-      .returning();
+      const [tx1Updated] = await dtx
+        .update(transactions)
+        .set({ transferPairId: tx2.id, updatedAt: new Date() })
+        .where(eq(transactions.id, tx1.id))
+        .returning();
 
-    await applyDelta(fromAccountId, -amount);
-    await applyDelta(toAccountId, amount);
+      await applyDelta(fromAccountId, -amount, dtx);
+      await applyDelta(toAccountId, amount, dtx);
 
-    return c.json({ from: tx1Updated, to: tx2 });
+      return { from: tx1Updated, to: tx2 };
+    });
+
+    return c.json({ from, to });
   } catch (e) {
     return c.json({ error: "bad request" }, 400);
   }
