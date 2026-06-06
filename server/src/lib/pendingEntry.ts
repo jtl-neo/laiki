@@ -30,10 +30,19 @@ export type DraftData = {
   categoryResolved?: boolean;
   /** Per-counterparty debts from the unified split parse (creditor = payer). */
   debts?: { userId: string; amount: number }[];
+  /**
+   * Debts still keyed by alias (no user rows yet). Shadow accounts are only
+   * created at confirm time so cancelling a draft leaves no residue (T-305).
+   */
+  debtsByName?: { name: string; amount: number }[];
+  /** The payer's own share for an explicit (non-equal) split. */
+  myShare?: number | null;
   /** Resolved payment_methods.id when the unified flow asked for one. */
   paymentMethodId?: string | null;
   /** Backend-derived missing fields driving the unified follow-up flow. */
   missingFields?: string[];
+  /** Set when a fund_expense parse matched one of the user's fund groups. */
+  fundResolved?: boolean;
 };
 
 export type Mode = "personal" | "group_split" | "fund";
@@ -42,6 +51,8 @@ export type Step =
   | "need_amount"
   | "need_account"
   | "need_participants"
+  | "need_debts"
+  | "need_fund"
   | "need_category"
   | "confirm";
 
@@ -208,18 +219,27 @@ export async function deletePending(pendingId: string): Promise<void> {
 }
 
 /**
- * Pure function deciding the first unsatisfied step in a fixed order.
+ * Pure function deciding the first unsatisfied step in a fixed order:
+ * amount → fund/account → debts/participants → category → confirm.
  * Fund mode skips need_account (the account is the group's fundAccountId,
- * resolved at commit time).
+ * resolved at commit time). `missingFields` (backend-derived from the
+ * unified parse) only ever ADDS asks; legacy drafts without it behave
+ * exactly as before.
  */
 export function computeNextStep(mode: Mode, draft: DraftData): Step {
+  const missing = new Set(draft.missingFields ?? []);
   if (draft.amount === null || draft.amount <= 0) return "need_amount";
-  if (mode !== "fund" && draft.accountId === null) return "need_account";
-  if (mode === "group_split" && !draft.participantsConfirmed) {
-    return "need_participants";
+  if (mode === "fund") {
+    if (missing.has("fund_name") && !draft.fundResolved) return "need_fund";
+    return "confirm";
   }
-  // Fund auto-categorizes at commit time, so it never asks for a category.
-  if (mode !== "fund" && draft.category === null && !draft.categoryResolved) {
+  if (draft.accountId === null) return "need_account";
+  if (mode === "group_split") {
+    const hasDebts = (draft.debtsByName?.length ?? 0) > 0 || (draft.debts?.length ?? 0) > 0;
+    if (missing.has("debt_distribution") && !hasDebts) return "need_debts";
+    if (!draft.participantsConfirmed) return "need_participants";
+  }
+  if (draft.category === null && !draft.categoryResolved) {
     return "need_category";
   }
   return "confirm";
@@ -311,9 +331,25 @@ export async function commitPending(pendingId: string): Promise<CommitResult> {
         .returning();
       if (!inserted) throw new Error("transaction_insert_failed");
 
-      // Splits for group_split: equal split, last participant absorbs remainder.
-      // (Rounding logic copied from message.ts lines ~498-508.)
-      if (mode === "group_split" && draft.participantUserIds.length > 0) {
+      // Splits for group_split. Explicit per-person debts (unified split
+      // parse) win over the legacy equal split; the payer absorbs
+      // total − Σdebts as their own share.
+      if (mode === "group_split" && draft.debts && draft.debts.length > 0) {
+        const debtSum = draft.debts.reduce((s, d) => s + d.amount, 0);
+        const myShare =
+          draft.myShare ?? Math.round((amount - debtSum) * 100) / 100;
+        const rows = [
+          { transactionId: inserted.id, userId: row.userId, amount: myShare.toFixed(2) },
+          ...draft.debts.map((d) => ({
+            transactionId: inserted.id,
+            userId: d.userId,
+            amount: d.amount.toFixed(2),
+          })),
+        ].filter((r) => Number(r.amount) > 0 || r.userId !== row.userId);
+        await tx.insert(transactionSplits).values(rows);
+      } else if (mode === "group_split" && draft.participantUserIds.length > 0) {
+        // Legacy equal split, last participant absorbs remainder.
+        // (Rounding logic copied from message.ts lines ~498-508.)
         const participants = draft.participantUserIds;
         const each = Math.floor((amount * 100) / participants.length) / 100;
         const rows = participants.map((uid, i) => ({

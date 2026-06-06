@@ -1,7 +1,7 @@
 import type { webhook } from "@line/bot-sdk";
 import { eq, sql } from "drizzle-orm";
 import { db } from "../../db/client.js";
-import { transactions, groups, users, accounts, accountMembers, groupMembers, userPreferences, settlements } from "../../db/schema.js";
+import { transactions, groups, users, accounts, accountMembers, groupMembers, userPreferences, settlements, pendingEntries } from "../../db/schema.js";
 import { and as dand } from "drizzle-orm";
 import { applyDelta, signedAmount } from "../../lib/accountDelta.js";
 import { canAccessAccount } from "../../lib/resolveAccount.js";
@@ -63,6 +63,7 @@ export async function handlePostback(event: webhook.PostbackEvent): Promise<void
     "select_all_members",
     "members_done",
     "ask_participants",
+    "pick_fund",
     "ask_category",
     "set_category",
     "skip_category",
@@ -690,6 +691,21 @@ async function handleDraftAction(
     return;
   }
 
+  if (action === "pick_fund") {
+    const p = await getPending(pendingId);
+    if (!p) return void (await replyText(replyToken, expiredMsg));
+    const groupId = params.get("groupId");
+    if (!groupId) return void (await replyText(replyToken, "基金無效"));
+    // Bind the pending row to the chosen fund group and mark it resolved.
+    await db
+      .update(pendingEntries)
+      .set({ groupId, updatedAt: new Date() })
+      .where(eq(pendingEntries.id, pendingId));
+    await patchDraft(pendingId, { fundResolved: true });
+    await advance();
+    return;
+  }
+
   if (action === "set_category") {
     const p = await getPending(pendingId);
     if (!p) return void (await replyText(replyToken, expiredMsg));
@@ -712,7 +728,29 @@ async function handleDraftAction(
     const p = await getPending(pendingId);
     if (!p) return void (await replyText(replyToken, expiredMsg));
     const mode = p.mode as Mode;
-    const draft = p.draft as DraftData;
+    let draft = p.draft as DraftData;
+
+    // Unified DM split: shadow accounts are created only NOW (confirm), so
+    // a cancelled draft never leaves virtual users behind (T-305).
+    if (
+      mode === "group_split" &&
+      draft.debtsByName &&
+      draft.debtsByName.length > 0 &&
+      (!draft.debts || draft.debts.length === 0)
+    ) {
+      const { resolveOrCreateShadow } = await import("../../lib/shadowAccount.js");
+      const resolved: { userId: string; amount: number }[] = [];
+      for (const d of draft.debtsByName) {
+        const debtorId = await resolveOrCreateShadow(p.userId, d.name);
+        resolved.push({ userId: debtorId, amount: d.amount });
+      }
+      const updated = await patchDraft(pendingId, {
+        debts: resolved,
+        participantUserIds: [p.userId, ...resolved.map((r) => r.userId)],
+      });
+      if (updated) draft = updated.draft as DraftData;
+    }
+
     const r = await commitPending(pendingId);
     if ("error" in r) {
       await replyText(replyToken, "記帳失敗，請稍後再試或手動新增。");

@@ -8,7 +8,7 @@ import {
 } from "../lib/pendingEntry.js";
 import { listUserAccounts } from "../lib/resolveAccount.js";
 import { getAllFundAccountIds } from "../lib/fundFilters.js";
-import { replyMessages } from "./reply.js";
+import { replyMessages, quickReplyActions } from "./reply.js";
 import { buildAmountAskQuickReply } from "./flex/amountAsk.js";
 import { buildAccountPickFlex } from "./flex/accountPicker.js";
 import { buildCategoryPickFlex } from "./flex/categoryPicker.js";
@@ -134,6 +134,51 @@ export async function replyForStep(
     return;
   }
 
+  if (step === "need_debts") {
+    await replyMessages(replyToken, [
+      {
+        type: "text",
+        text: "分帳金額對不上 🤔 請再說一次每個人的分攤，例如：\n「a 180、b 200，其他我出」",
+        quickReply: quickReplyActions([
+          { label: "取消這筆", data: `action=cancel_entry&pendingId=${pending.id}`, displayText: "取消" },
+        ]),
+      },
+    ]);
+    return;
+  }
+
+  if (step === "need_fund") {
+    const { listUserFundGroups } = await import("./router.js");
+    const funds = await listUserFundGroups(pending.userId);
+    if (funds.length === 0) {
+      await replyMessages(replyToken, [
+        {
+          type: "text",
+          text: "你還沒有共同基金帳本。先到選單建立一個，或取消這筆。",
+          quickReply: quickReplyActions([
+            { label: "取消這筆", data: `action=cancel_entry&pendingId=${pending.id}`, displayText: "取消" },
+          ]),
+        },
+      ]);
+      return;
+    }
+    await replyMessages(replyToken, [
+      {
+        type: "text",
+        text: "要從哪個基金扣款？",
+        quickReply: quickReplyActions([
+          ...funds.slice(0, 10).map((f) => ({
+            label: f.name.slice(0, 20),
+            data: `action=pick_fund&pendingId=${pending.id}&groupId=${f.id}`,
+            displayText: f.name,
+          })),
+          { label: "取消", data: `action=cancel_entry&pendingId=${pending.id}`, displayText: "取消" },
+        ]),
+      },
+    ]);
+    return;
+  }
+
   if (step === "need_category") {
     await replyMessages(replyToken, [
       buildCategoryPickFlex({
@@ -153,7 +198,16 @@ export async function replyForStep(
   const groupName = pending.groupId ? await groupNameById(pending.groupId) : null;
   let participantsLabel: string | null = null;
   let perHead: number | null = null;
-  if (mode === "group_split" && draft.participantUserIds.length > 0) {
+  if (mode === "group_split" && draft.debtsByName && draft.debtsByName.length > 0) {
+    // Unified DM split: explicit per-person amounts from the LLM.
+    const debtSum = draft.debtsByName.reduce((s, d) => s + d.amount, 0);
+    const myShare =
+      draft.myShare ?? Math.round(((draft.amount ?? 0) - debtSum) * 100) / 100;
+    participantsLabel = [
+      `我 ${money(myShare)}`,
+      ...draft.debtsByName.map((d) => `${d.name} ${money(d.amount)}`),
+    ].join("、");
+  } else if (mode === "group_split" && draft.participantUserIds.length > 0) {
     const names = await namesForUserIds(draft.participantUserIds);
     participantsLabel = names.join("、");
     if (draft.amount && draft.amount > 0) {

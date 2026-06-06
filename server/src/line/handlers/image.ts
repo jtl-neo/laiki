@@ -5,7 +5,8 @@ import { db } from "../../db/client.js";
 import { users, groups, groupMembers, accounts, transactions } from "../../db/schema.js";
 import { lineBlobClient } from "../client.js";
 import { replyMessages, replyText, showLoading, quickReplyActions, flexWithQuickReply } from "../reply.js";
-import { recognizeReceipt } from "../../ai/recognizeReceipt.js";
+import { parseUnified } from "../../ai/parseUnified.js";
+import { loadParseContext } from "../../ai/buildContext.js";
 import { checkAndConsume } from "../../lib/quota.js";
 import { recordAi } from "../../lib/aiRecords.js";
 import { applyDelta, signedAmount } from "../../lib/accountDelta.js";
@@ -276,7 +277,11 @@ async function processOneImage(
   let parsed;
   incr("recognize_total");
   try {
-    parsed = await recognizeReceipt(quota.provider, [{ base64: imageBase64, mimeType }]);
+    const context = await loadParseContext(userId);
+    parsed = await parseUnified(quota.provider, {
+      images: [{ base64: imageBase64, mimeType }],
+      context,
+    });
   } catch (e) {
     incr("recognize_errors");
     const msg = e instanceof Error ? e.message : String(e);
@@ -286,9 +291,12 @@ async function processOneImage(
   }
 
   if (parsed.confidence < 0.3) return { status: "low_conf" };
+  if (parsed.data.total_amount === null || parsed.data.total_amount <= 0) {
+    return { status: "low_conf" };
+  }
 
-  const txDate = parsed.tx_date ?? new Date().toISOString().slice(0, 10);
-  const amount = Number(parsed.amount);
+  const txDate = parsed.data.tx_date ?? new Date().toISOString().slice(0, 10);
+  const amount = Number(parsed.data.total_amount);
 
   const [tx] = await db
     .insert(transactions)
@@ -298,9 +306,9 @@ async function processOneImage(
       amount: amount.toFixed(2),
       txDate,
       paidByUserId: userId,
-      category: parsed.category ?? null,
+      category: parsed.data.category ?? null,
       kind: "expense",
-      note: parsed.note ?? parsed.merchant ?? null,
+      note: parsed.data.description ?? null,
       source: "line_image",
       aiConfidence: parsed.confidence.toFixed(3),
     })
@@ -324,10 +332,10 @@ async function processOneImage(
   const flex = buildTxConfirmFlex({
     txId: tx!.id,
     amount,
-    category: parsed.category ?? null,
+    category: parsed.data.category ?? null,
     accountName,
     groupName,
-    note: parsed.note ?? parsed.merchant ?? null,
+    note: parsed.data.description ?? null,
     confidence: parsed.confidence,
     liffEditUrl: `${LIFF_BASE}/tx/${tx!.id}/edit`,
   });

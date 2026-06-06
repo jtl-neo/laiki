@@ -85,4 +85,7 @@ export const fakeMessagingClient = {
   ): Promise<{ displayName: string; userId: string }> {
     return { displayName: `User ${lineUserId.slice(-4)}`, userId: lineUserId };
   },
+  async showLoadingAnimation(_args: { chatId: string; loadingSeconds?: number }): Promise<unknown> {
+    return {};
+  },
 };

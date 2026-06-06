@@ -3,6 +3,10 @@ import { eq } from "drizzle-orm";
 import { db } from "../../db/client.js";
 import { users, groups, groupMembers } from "../../db/schema.js";
 import { parseText } from "../../ai/parseTransaction.js";
+import { parseUnified } from "../../ai/parseUnified.js";
+import { loadParseContext } from "../../ai/buildContext.js";
+import { routeUnified } from "../router.js";
+import { claimBindingCode } from "../../lib/shadowAccount.js";
 import { checkAndConsume } from "../../lib/quota.js";
 import { recordAi } from "../../lib/aiRecords.js";
 import { resolvePersonalGroupId } from "../../lib/ensureDefaults.js";
@@ -73,6 +77,11 @@ export async function handleTextMessage(event: webhook.MessageEvent): Promise<vo
 
   if (await tryPersonalCommand(event.replyToken, user.id, text)) return;
 
+  // PIN claim intercept: a bare 6-digit number is checked against
+  // binding_codes BEFORE the amount shortcut and the parser, so a PIN can
+  // never be swallowed as an amount (T-316). Unknown codes fall through.
+  if (await tryClaimPin(event.replyToken, lineUserId, user.displayName, text)) return;
+
   // STEP 4: if there's an active draft for this DM waiting on the amount and the
   // user simply typed a positive number, treat it as the amount answer instead
   // of starting a brand-new parse.
@@ -91,11 +100,23 @@ export async function handleTextMessage(event: webhook.MessageEvent): Promise<vo
   let parsed;
   incr("parse_total");
   try {
-    parsed = await parseText(quota.provider, text);
+    const context = await loadParseContext(user.id);
+    parsed = await parseUnified(quota.provider, { text, context });
   } catch (e) {
     incr("parse_errors");
     const msg = e instanceof Error ? e.message : String(e);
     logger.warn({ err: e }, "parse failed");
+    // Record the failed inference so the eval/debug trail stays complete.
+    await recordAi({
+      userId: user.id,
+      groupId: null,
+      op: "parse",
+      source: "line_text",
+      provider: quota.providerName,
+      model: quota.model,
+      inputText: text,
+      errorMessage: msg,
+    }).catch(() => {});
     const busy = /503|UNAVAILABLE|overloaded|high demand|429|RESOURCE_EXHAUSTED/i.test(msg);
     await replyMessages(event.replyToken, [
       flexWithQuickReply(
@@ -118,7 +139,6 @@ export async function handleTextMessage(event: webhook.MessageEvent): Promise<vo
   // Resolve the speaker's selectable (non-fund) accounts so we can try to
   // pre-fill the account from the parsed hint (null if no match -> ask later).
   const fundAcctIdSet = new Set(await getAllFundAccountIds());
-  const fundGroupIdSet = new Set(await getUserFundGroupIds(user.id));
   const userAccountsAll = await listUserAccounts(user.id);
   const userAccounts = userAccountsAll.filter((a) => !fundAcctIdSet.has(a.id));
 
@@ -134,25 +154,20 @@ export async function handleTextMessage(event: webhook.MessageEvent): Promise<vo
     await replyText(event.replyToken, "找不到群組，請重新加好友以初始化。");
     return;
   }
-  let group = personalGroup;
-  // A group_hint may still redirect to one of the user's other (non-fund) groups.
-  if (parsed.group_hint) {
-    const memberRows = await db
-      .select({ group: groups })
-      .from(groupMembers)
-      .innerJoin(groups, eq(groups.id, groupMembers.groupId))
-      .where(eq(groupMembers.userId, user.id));
-    const userGroups = memberRows
-      .map((r) => r.group)
-      .filter((g) => !fundGroupIdSet.has(g.id));
-    const h = parsed.group_hint.toLowerCase();
-    const match = userGroups.find((g) => g.name.toLowerCase().includes(h));
-    if (match) group = match;
-  }
+
+  // Transaction router: unified type → mode + draft (split keeps debts by
+  // alias until confirm; fund matches the user's fund groups).
+  const routed = await routeUnified(user.id, parsed, {
+    accounts: userAccounts,
+    fallbackNote: text,
+  });
+
+  const pendingGroupId =
+    routed.mode === "fund" ? routed.fundGroupId : personalGroup.id;
 
   const aiRecordId = await recordAi({
     userId: user.id,
-    groupId: group.id,
+    groupId: pendingGroupId,
     op: "parse",
     source: "line_text",
     provider: quota.providerName,
@@ -162,32 +177,62 @@ export async function handleTextMessage(event: webhook.MessageEvent): Promise<vo
     confidence: parsed.confidence,
   });
 
-  const kind: DraftKind = parsed.kind === "transfer" ? "expense" : parsed.kind;
-  const resolvedAccount = resolveAccount(userAccounts, parsed.account_hint);
-  const draft: DraftData = {
-    amount: parsed.amount ?? null,
-    kind,
-    category: parsed.category ?? null,
-    accountId: resolvedAccount?.id ?? null,
-    accountHint: parsed.account_hint ?? null,
-    note: parsed.note ?? text,
-    txDate: parsed.tx_date ?? null,
-    participantUserIds: [],
-    confidence: parsed.confidence,
-  };
-
   const pending = await upsertPending({
     userId: user.id,
-    groupId: group.id,
+    groupId: pendingGroupId,
     lineGroupId: null,
-    mode: "personal",
+    mode: routed.mode,
     step: "need_amount",
-    draft,
+    draft: routed.draft,
     aiRecordId,
   });
   const advanced =
-    (await setStep(pending.id, computeNextStep("personal", draft))) ?? pending;
-  await replyForStep(event.replyToken, advanced, "personal");
+    (await setStep(pending.id, computeNextStep(routed.mode, routed.draft))) ?? pending;
+  await replyForStep(event.replyToken, advanced, routed.mode);
+}
+
+/**
+ * Intercept a bare 6-digit PIN and try to claim a shadow account with it.
+ * Looks up binding_codes first; unknown codes return false so the text
+ * falls through to the normal amount/parse path (T-316).
+ */
+async function tryClaimPin(
+  replyToken: string,
+  lineUserId: string,
+  displayName: string | null,
+  text: string,
+): Promise<boolean> {
+  if (!/^\d{6}$/.test(text.trim())) return false;
+
+  const result = await claimBindingCode(text.trim(), lineUserId, displayName);
+  if (!result.ok) {
+    if (result.error === "not_found") return false; // probably an amount
+    const msg =
+      result.error === "expired"
+        ? "這組綁定碼已過期，請對方重新產生一組。"
+        : result.error === "used"
+          ? "這組綁定碼已被使用過了。"
+          : result.error === "self_claim"
+            ? "這是你自己產生的綁定碼，不能自己認領喔。"
+            : "這組綁定碼無法使用。";
+    await replyText(replyToken, msg);
+    return true;
+  }
+
+  const { getOutstandingForUser } = await import("../../lib/debts.js");
+  const outstanding = await getOutstandingForUser(result.userId);
+  const lines: string[] = ["🎉 歡迎加入！已成功認領歷史帳目。"];
+  for (const o of outstanding.iOwe) {
+    lines.push(`🔴 您欠 ${o.displayName ?? "對方"}：NT$${o.amount.toLocaleString("zh-TW")}`);
+  }
+  for (const o of outstanding.owedToMe) {
+    lines.push(`🟢 ${o.displayName ?? "對方"} 欠您：NT$${o.amount.toLocaleString("zh-TW")}`);
+  }
+  if (outstanding.iOwe.length === 0 && outstanding.owedToMe.length === 0) {
+    lines.push("目前沒有未結帳務。");
+  }
+  await replyText(replyToken, lines.join("\n"));
+  return true;
 }
 
 async function handleGroupText(
