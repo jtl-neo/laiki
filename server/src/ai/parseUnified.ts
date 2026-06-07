@@ -45,8 +45,11 @@ export async function parseUnified(
     throw new Error("parseUnified: need text or images");
   }
 
-  // Fast path: single-amount quick entries never hit the LLM.
-  if (!hasImages) {
+  // Fast path: single-amount quick entries never hit the LLM — but never
+  // when the text mentions one of the user's funds or friends; those need
+  // the LLM's fund/split routing (e.g.「吞金獸消費4500」with a fund named
+  // 吞金獸 must become fund_expense, not a personal expense).
+  if (!hasImages && !mentionsContextName(text, args.context)) {
     const simple = parseSimpleText(text);
     if (simple) return toUnified(simple);
   }
@@ -76,6 +79,19 @@ export async function parseUnified(
     }
   }
   throw lastErr;
+}
+
+/**
+ * True when the text contains a known fund name or friend alias (length
+ * ≥ 2 to avoid noise from single-character aliases).
+ */
+function mentionsContextName(text: string, context?: ParseContext): boolean {
+  if (!context) return false;
+  const names = [...context.fundNames, ...context.aliases];
+  return names.some((n) => {
+    const name = n.trim();
+    return name.length >= 2 && text.includes(name);
+  });
 }
 
 function buildImageUserText(count: number): string {

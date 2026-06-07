@@ -522,6 +522,27 @@ async function tryPersonalCommand(
     await replyMessages(replyToken, [buildMonthlyFlex({ ...data, liffBase: LIFF_BASE })]);
     return true;
   }
+  // 基金餘額查詢：「吞金獸餘額」「吞金獸目前餘額多少」
+  const fundQuery = /^(.{1,20}?)\s*(?:目前|的)?\s*餘額\s*(?:多少|是多少|還有多少|還剩多少)?\s*[?？]?$/.exec(t);
+  if (fundQuery && !/^(餘額|balance)$/i.test(t)) {
+    const handled = await tryFundBalanceQuery(replyToken, userId, fundQuery[1]!.trim());
+    if (handled) return true;
+  }
+
+  // 基金餘額校正：「吞金獸更新餘額為-38867」「吞金獸餘額改成5000」
+  const fundSet =
+    /^(.{1,20}?)\s*(?:要)?\s*(?:更新|校正|調整|設定|改)\s*餘額\s*(?:為|成|到)?\s*(-?\d+(?:\.\d+)?)\s*(?:元|塊)?$/.exec(t) ??
+    /^(.{1,20}?)\s*餘額\s*(?:更新|校正|調整|設定|改)\s*(?:為|成|到)?\s*(-?\d+(?:\.\d+)?)\s*(?:元|塊)?$/.exec(t);
+  if (fundSet) {
+    const handled = await tryFundBalanceSet(
+      replyToken,
+      userId,
+      fundSet[1]!.trim(),
+      Number(fundSet[2]),
+    );
+    if (handled) return true;
+  }
+
   const createGroup = /^建立(群組|基金)\s+(.+)$/.exec(t);
   if (createGroup) {
     const kind = createGroup[1] === "基金" ? ("fund" as const) : ("split" as const);
@@ -568,6 +589,105 @@ async function tryPersonalCommand(
     return true;
   }
   return false;
+}
+
+/**
+ * Reply the fund's balance when `name` matches one of the user's funds.
+ * Returns false (fall through to the parser) when nothing matches.
+ */
+async function tryFundBalanceQuery(
+  replyToken: string,
+  userId: string,
+  name: string,
+): Promise<boolean> {
+  if (!name) return false;
+  const { matchFundGroup } = await import("../router.js");
+  const groupId = await matchFundGroup(userId, name);
+  if (!groupId) return false;
+
+  const [g] = await db.select().from(groups).where(eq(groups.id, groupId)).limit(1);
+  if (!g?.fundAccountId) return false;
+  const { accounts } = await import("../../db/schema.js");
+  const [acct] = await db
+    .select({ balance: accounts.balance })
+    .from(accounts)
+    .where(eq(accounts.id, g.fundAccountId))
+    .limit(1);
+  const balance = Number(acct?.balance ?? 0);
+  await replyText(
+    replyToken,
+    `🏡 ${g.name} 目前餘額：NT$${balance.toLocaleString("zh-TW")}`,
+    quickReplyActions([
+      { label: "群組", data: "action=noop", displayText: "我的群組" },
+    ]),
+  );
+  return true;
+}
+
+/**
+ * Owner-only fund balance correction: sets the fund to the target value by
+ * recording an adjustment transaction (history stays consistent) and
+ * notifies every bound member.
+ */
+async function tryFundBalanceSet(
+  replyToken: string,
+  userId: string,
+  name: string,
+  target: number,
+): Promise<boolean> {
+  if (!name || !Number.isFinite(target)) return false;
+  const { matchFundGroup } = await import("../router.js");
+  const groupId = await matchFundGroup(userId, name);
+  if (!groupId) return false;
+
+  const [g] = await db.select().from(groups).where(eq(groups.id, groupId)).limit(1);
+  if (!g?.fundAccountId) return false;
+  if (g.ownerUserId !== userId) {
+    await replyText(replyToken, "只有基金擁有者可以校正餘額。");
+    return true;
+  }
+
+  const { accounts, transactions } = await import("../../db/schema.js");
+  const [acct] = await db
+    .select({ balance: accounts.balance })
+    .from(accounts)
+    .where(eq(accounts.id, g.fundAccountId))
+    .limit(1);
+  const current = Number(acct?.balance ?? 0);
+  const delta = Math.round((target - current) * 100) / 100;
+  if (delta === 0) {
+    await replyText(replyToken, `🏡 ${g.name} 餘額已是 NT$${target.toLocaleString("zh-TW")}，不需調整。`);
+    return true;
+  }
+
+  const { applyDelta } = await import("../../lib/accountDelta.js");
+  const txId = await db.transaction(async (tx) => {
+    const [inserted] = await tx
+      .insert(transactions)
+      .values({
+        groupId: g.id,
+        accountId: g.fundAccountId!,
+        amount: Math.abs(delta).toFixed(2),
+        txDate: new Date().toISOString().slice(0, 10),
+        paidByUserId: userId,
+        category: "餘額校正",
+        kind: delta > 0 ? "fund_in" : "fund_out",
+        note: `餘額校正 → NT$${target.toLocaleString("zh-TW")}`,
+        source: "line_text",
+      })
+      .returning();
+    if (!inserted) throw new Error("adjustment insert failed");
+    await applyDelta(g.fundAccountId!, delta, tx);
+    return inserted.id;
+  });
+
+  await replyText(
+    replyToken,
+    `✅ ${g.name} 餘額已校正：NT$${current.toLocaleString("zh-TW")} → NT$${target.toLocaleString("zh-TW")}`,
+  );
+  const { notifyFundChange } = await import("../../lib/notify.js");
+  await notifyFundChange(txId).catch(() => {});
+  return true;
 }
 
 function stripMention(text: string): string {

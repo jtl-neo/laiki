@@ -117,4 +117,32 @@ describe("parseUnified", () => {
   it("rejects calls with neither text nor images", async () => {
     await expect(parseUnified(throwingProvider, {})).rejects.toThrow();
   });
+
+  // Fund-name mention must bypass the deterministic fast path: with a fund
+  // named 吞金獸,「吞金獸消費4500」needs LLM routing to fund_expense.
+  it("skips the fast path when the text mentions a known fund name", async () => {
+    const provider = queueProvider([
+      {
+        type: "fund_expense",
+        is_complete: true,
+        confidence: 0.9,
+        data: { description: "消費", total_amount: 4500, fund_name: "吞金獸" },
+      },
+    ]);
+    const parsed = await parseUnified(provider, {
+      text: "吞金獸消費4500",
+      context: { aliases: [], paymentMethods: [], fundNames: ["吞金獸"] },
+    });
+    expect(parsed.type).toBe("fund_expense");
+    expect(provider.calls).toHaveLength(1);
+  });
+
+  it("keeps the fast path when no context name is mentioned", async () => {
+    const parsed = await parseUnified(throwingProvider, {
+      text: "午餐 120 現金",
+      context: { aliases: ["老王"], paymentMethods: [], fundNames: ["吞金獸"] },
+    });
+    expect(parsed.type).toBe("expense");
+    expect(parsed.confidence).toBe(0.92);
+  });
 });

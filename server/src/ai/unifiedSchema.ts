@@ -30,7 +30,8 @@ export type DebtItem = z.infer<typeof DebtItemSchema>;
 export const UnifiedParseSchema = z.object({
   type: z.enum(["expense", "income", "transfer", "split_expense", "fund_expense"]),
   is_complete: z.boolean(),
-  missing_fields: z.array(z.string()).default([]),
+  // Models sometimes emit null instead of [] for empty arrays — tolerate it.
+  missing_fields: z.preprocess((v) => v ?? [], z.array(z.string())),
   confidence: z.number().min(0).max(1).default(0.8),
   data: z.object({
     description: nullableStr,
@@ -38,7 +39,7 @@ export const UnifiedParseSchema = z.object({
     payment_method: nullableStr,
     payer_id: nullableStr, // "me" | "common_fund" | alias
     my_share: z.number().nullable().default(null),
-    debts: z.array(DebtItemSchema).default([]),
+    debts: z.preprocess((v) => v ?? [], z.array(DebtItemSchema)),
     fund_name: nullableStr,
     category: nullableStr,
     tx_date: txDateStr,
@@ -109,6 +110,7 @@ type 判斷：
 - 含「我先出/先墊/平分/AA/各付/欠/代買/代付/幫某人買…要還」等「別人欠我錢」語意 → split_expense
 - 注意：只是描述「和/跟某人一起吃飯、出去玩」而完全沒有墊付、欠款、分攤語意 → 一般 expense，不是 split_expense
 - 含「共同基金/公費/基金」且是支出 → fund_expense
+- 訊息中出現「已知基金」清單裡的名稱（例如基金叫「吞金獸」，使用者說「吞金獸消費4500」）→ fund_expense，fund_name 填該名稱、total_amount=4500（基金名後面緊接的數字就是金額）
 - 含「收到/入帳/薪水」→ income；含「轉帳/提款」→ transfer
 - 其他 → expense
 
