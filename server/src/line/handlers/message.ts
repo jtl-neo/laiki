@@ -607,20 +607,48 @@ async function tryFundBalanceQuery(
 
   const [g] = await db.select().from(groups).where(eq(groups.id, groupId)).limit(1);
   if (!g?.fundAccountId) return false;
-  const { accounts } = await import("../../db/schema.js");
-  const [acct] = await db
-    .select({ balance: accounts.balance })
-    .from(accounts)
-    .where(eq(accounts.id, g.fundAccountId))
-    .limit(1);
-  const balance = Number(acct?.balance ?? 0);
-  await replyText(
-    replyToken,
-    `🏡 ${g.name} 目前餘額：NT$${balance.toLocaleString("zh-TW")}`,
-    quickReplyActions([
-      { label: "群組", data: "action=noop", displayText: "我的群組" },
-    ]),
-  );
+  const { accounts, transactions, groupMembers: gm } = await import("../../db/schema.js");
+  const { desc, count } = await import("drizzle-orm");
+  const [[acct], recent, [memberCount]] = await Promise.all([
+    db
+      .select({ balance: accounts.balance })
+      .from(accounts)
+      .where(eq(accounts.id, g.fundAccountId))
+      .limit(1),
+    db
+      .select({
+        txDate: transactions.txDate,
+        note: transactions.note,
+        kind: transactions.kind,
+        amount: transactions.amount,
+      })
+      .from(transactions)
+      .where(eq(transactions.groupId, g.id))
+      .orderBy(desc(transactions.createdAt))
+      .limit(5),
+    db.select({ n: count() }).from(gm).where(eq(gm.groupId, g.id)),
+  ]);
+
+  const { buildFundBalanceFlex } = await import("../flex/fundBalance.js");
+  await replyMessages(replyToken, [
+    flexWithQuickReply(
+      buildFundBalanceFlex({
+        fundName: g.name,
+        balance: Number(acct?.balance ?? 0),
+        memberCount: Number(memberCount?.n ?? 0),
+        recent: recent.map((t) => ({
+          txDate: t.txDate,
+          note: t.note,
+          kind: t.kind,
+          amount: Number(t.amount),
+        })),
+      }),
+      quickReplyActions([
+        { label: "記一筆", text: `${g.name}消費 ` },
+        { label: "我的群組", text: "我的群組" },
+      ]),
+    ),
+  ]);
   return true;
 }
 

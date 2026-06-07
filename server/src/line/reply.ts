@@ -29,14 +29,18 @@ export async function showLoading(userId: string, seconds = 30): Promise<void> {
 }
 
 export function quickReplyActions(
-  items: { label: string; data?: string; uri?: string; displayText?: string }[],
+  items: { label: string; data?: string; uri?: string; text?: string; displayText?: string }[],
 ): messagingApi.QuickReply {
   return {
     items: items.map((i) => ({
       type: "action",
       action: i.uri
         ? { type: "uri", label: i.label, uri: i.uri }
-        : { type: "postback", label: i.label, data: i.data ?? "", displayText: i.displayText ?? i.label },
+        : i.text !== undefined
+          ? // Sends the text as a user message → re-enters the normal
+            // command/parse flow (used for「記一筆」-style shortcuts).
+            { type: "message", label: i.label, text: i.text }
+          : { type: "postback", label: i.label, data: i.data ?? "", displayText: i.displayText ?? i.label },
     })),
   };
 }
