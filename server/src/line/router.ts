@@ -80,8 +80,24 @@ export async function routeUnified(
     return { mode: "fund", draft, fundGroupId };
   }
 
-  // expense / income / transfer → personal draft (transfer treated as
-  // expense, mirroring the legacy DM flow).
+  // transfer → personal draft kept as kind=transfer: it debits the account
+  // (real money out) but is excluded from expense/income stats and never
+  // touches split debts. No category step.
+  if (parse.type === "transfer") {
+    return {
+      mode: "personal",
+      draft: {
+        ...base,
+        kind: "transfer",
+        category: null,
+        categoryResolved: true,
+        note: d.description ?? opts.fallbackNote,
+      },
+      fundGroupId: null,
+    };
+  }
+
+  // expense / income → personal draft.
   const kind: DraftKind = parse.type === "income" ? "income" : "expense";
   return { mode: "personal", draft: { ...base, kind }, fundGroupId: null };
 }

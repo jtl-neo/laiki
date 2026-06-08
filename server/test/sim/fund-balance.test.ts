@@ -110,6 +110,37 @@ describe.skipIf(!integrationAvailable)("fund routing + balance intents (吞金�
     expect(Number(fund!.balance)).toBe(10000);
   });
 
+  it("轉帳給[好友] records as transfer, debits account, NOT an expense", async () => {
+    const me = await uid(ME);
+    const { seedAccount } = await import("../helpers.js");
+    const account = await seedAccount(me, "現金", 50000);
+
+    sim.provider.enqueue({
+      type: "transfer",
+      is_complete: true,
+      confidence: 0.9,
+      data: { description: "轉帳給姿盈", total_amount: 10000, payment_method: "現金" },
+    });
+    await sim.send(textEvent(ME, "轉帳給姿盈10000"));
+    const reply = messageText(lastReply()!.messages);
+    expect(reply).toContain("confirm_entry");
+    expect(reply).toContain("轉帳");
+    const pendingId = /pendingId=([0-9a-f-]+)/.exec(reply)?.[1];
+    await sim.send(postbackEvent(ME, `action=confirm_entry&pendingId=${pendingId}`));
+
+    const db = await getDb();
+    const { transactions, accounts, debts } = await import("../../src/db/schema.js");
+    const txs = await db.select().from(transactions);
+    expect(txs).toHaveLength(1);
+    expect(txs[0]!.kind).toBe("transfer");
+    // Debited the account the transaction actually touched (resolved from
+    // the「現金」hint — which may be the seeded one or the default wallet).
+    const [acct] = await db.select().from(accounts).where(eq(accounts.id, txs[0]!.accountId));
+    const initial = acct!.id === account.id ? 50000 : 0;
+    expect(Number(acct!.balance)).toBe(initial - 10000);
+    expect(await db.select().from(debts)).toHaveLength(0); // no split debt
+  });
+
   it("plain 餘額 still hits the legacy personal balance card", async () => {
     const me = await uid(ME);
     await seedFundGroup(me, "吞金獸", 10000, []);

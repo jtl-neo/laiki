@@ -23,7 +23,7 @@ function money(n: number): string {
 const KIND_LABEL: Record<DraftData["kind"], string> = {
   expense: "支出",
   income: "收入",
-  transfer: "支出",
+  transfer: "轉帳",
   fund_in: "存入",
   fund_out: "支出",
 };
