@@ -42,6 +42,45 @@ app.post("/friends", async (c) => {
   return c.json({ friend });
 });
 
+/** A friend's PENDING debt breakdown owed to the caller. */
+app.get("/friends/:id/debts", async (c) => {
+  const userId = c.get("userId");
+  const friendId = c.req.param("id");
+  const [friend] = await db
+    .select({ displayName: users.displayName, isVirtual: users.isVirtual })
+    .from(users)
+    .where(and(eq(users.id, friendId), eq(users.createdBy, userId)))
+    .limit(1);
+  if (!friend) return c.json({ error: "not found" }, 404);
+
+  const { listFriendDebts } = await import("../../lib/debts.js");
+  const debts = await listFriendDebts(userId, friendId);
+  const total = debts.reduce((s, d) => s + d.amount, 0);
+  return c.json({ friend, debts, total });
+});
+
+const SettleSchema = z.object({ debtId: z.string().uuid().optional() });
+
+/** Settle one or all of a friend's debts to the caller. */
+app.post("/friends/:id/settle", async (c) => {
+  const userId = c.get("userId");
+  const friendId = c.req.param("id");
+  const [friend] = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(and(eq(users.id, friendId), eq(users.createdBy, userId)))
+    .limit(1);
+  if (!friend) return c.json({ error: "not found" }, 404);
+
+  const body = await c.req.json().catch(() => ({}));
+  const parsed = SettleSchema.safeParse(body ?? {});
+  if (!parsed.success) return c.json({ error: "bad request" }, 400);
+
+  const { settleFriendDebts } = await import("../../lib/debts.js");
+  const settled = await settleFriendDebts(userId, friendId, parsed.data.debtId);
+  return c.json({ settled });
+});
+
 /** Generate a 24h binding PIN for one of the caller's shadow friends. */
 app.post("/friends/:id/pin", async (c) => {
   const userId = c.get("userId");

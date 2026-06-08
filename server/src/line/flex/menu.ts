@@ -63,6 +63,7 @@ export function buildPersonalMenuFlex(liffBase: string): messagingApi.FlexMessag
         layout: "horizontal",
         spacing: "sm",
         contents: [
+          tile("👥", "好友", { kind: "uri", uri: `${liffBase}/friends` }),
           tile("📈", "預算", { kind: "uri", uri: `${liffBase}/budgets` }),
           tile("⚙", "設定", { kind: "uri", uri: `${liffBase}/settings` }),
         ],

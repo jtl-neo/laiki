@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { db } from "../db/client.js";
 import { debts, users } from "../db/schema.js";
 
@@ -28,6 +28,79 @@ export async function insertDebtsForTransaction(
 
 export async function settleDebt(debtId: string): Promise<void> {
   await db.update(debts).set({ status: "SETTLED" }).where(eq(debts.id, debtId));
+}
+
+export type FriendDebt = {
+  id: string;
+  transactionId: string;
+  amount: number;
+  note: string | null;
+  txDate: string | null;
+  createdAt: Date;
+};
+
+/** PENDING debts a specific friend owes the creditor, newest first. */
+export async function listFriendDebts(
+  creditorId: string,
+  debtorId: string,
+): Promise<FriendDebt[]> {
+  const { transactions } = await import("../db/schema.js");
+  const rows = await db
+    .select({
+      id: debts.id,
+      transactionId: debts.transactionId,
+      amount: debts.amount,
+      note: transactions.note,
+      txDate: transactions.txDate,
+      createdAt: debts.createdAt,
+    })
+    .from(debts)
+    .leftJoin(transactions, eq(transactions.id, debts.transactionId))
+    .where(
+      and(
+        eq(debts.creditorId, creditorId),
+        eq(debts.debtorId, debtorId),
+        eq(debts.status, "PENDING"),
+      ),
+    )
+    .orderBy(desc(debts.createdAt));
+  return rows.map((r) => ({
+    id: r.id,
+    transactionId: r.transactionId,
+    amount: Number(r.amount),
+    note: r.note,
+    txDate: r.txDate,
+    createdAt: r.createdAt,
+  }));
+}
+
+/**
+ * Settle a friend's outstanding debt. Without `debtId`, settles ALL of the
+ * friend's PENDING debts to the creditor. Returns the count settled.
+ */
+export async function settleFriendDebts(
+  creditorId: string,
+  debtorId: string,
+  debtId?: string,
+): Promise<number> {
+  const where = debtId
+    ? and(
+        eq(debts.id, debtId),
+        eq(debts.creditorId, creditorId),
+        eq(debts.debtorId, debtorId),
+        eq(debts.status, "PENDING"),
+      )
+    : and(
+        eq(debts.creditorId, creditorId),
+        eq(debts.debtorId, debtorId),
+        eq(debts.status, "PENDING"),
+      );
+  const updated = await db
+    .update(debts)
+    .set({ status: "SETTLED" })
+    .where(where)
+    .returning({ id: debts.id });
+  return updated.length;
 }
 
 export type OutstandingEntry = {

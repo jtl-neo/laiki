@@ -55,6 +55,69 @@ describe.skipIf(!integrationAvailable)("liff friends API", () => {
     expect(forbidden.status).toBe(404);
   });
 
+  it("lists a friend's debts and settles them", async () => {
+    const me = await seedUser();
+    const friend = await seedShadow(me.userId, "a");
+    const { getDb } = await import("../helpers.js");
+    const { seedAccount, seedGroup } = await import("../helpers.js");
+    const db = await getDb();
+    const { transactions, debts } = await import("../../src/db/schema.js");
+    const account = await seedAccount(me.userId, "Cash", 1000);
+    const group = await seedGroup(me.userId);
+    const [tx] = await db
+      .insert(transactions)
+      .values({
+        groupId: group.id,
+        accountId: account.id,
+        amount: "300.00",
+        txDate: "2026-06-05",
+        paidByUserId: me.userId,
+        kind: "expense",
+        note: "午餐",
+      })
+      .returning();
+    await db.insert(debts).values([
+      { transactionId: tx!.id, creditorId: me.userId, debtorId: friend.id, amount: "180.00" },
+      { transactionId: tx!.id, creditorId: me.userId, debtorId: friend.id, amount: "120.00" },
+    ]);
+
+    const list = await appRequest("GET", `/api/v1/liff/friends/${friend.id}/debts`, {
+      cookie: me.cookie,
+    });
+    const lBody = (await list.json()) as { debts: unknown[]; total: number };
+    expect(lBody.debts).toHaveLength(2);
+    expect(lBody.total).toBe(300);
+
+    const settle = await appRequest("POST", `/api/v1/liff/friends/${friend.id}/settle`, {
+      cookie: me.cookie,
+      body: {},
+    });
+    const sBody = (await settle.json()) as { settled: number };
+    expect(sBody.settled).toBe(2);
+
+    const after = await appRequest("GET", "/api/v1/liff/friends", { cookie: me.cookie });
+    const aBody = (await after.json()) as { friends: { outstanding: number }[] };
+    expect(aBody.friends[0]!.outstanding).toBe(0);
+  });
+
+  it("cannot view or settle another user's friend debts", async () => {
+    const me = await seedUser();
+    const other = await seedUser();
+    const friend = await seedShadow(me.userId, "a");
+    expect(
+      (await appRequest("GET", `/api/v1/liff/friends/${friend.id}/debts`, { cookie: other.cookie }))
+        .status,
+    ).toBe(404);
+    expect(
+      (
+        await appRequest("POST", `/api/v1/liff/friends/${friend.id}/settle`, {
+          cookie: other.cookie,
+          body: {},
+        })
+      ).status,
+    ).toBe(404);
+  });
+
   it("refuses a PIN for an already-bound friend", async () => {
     const me = await seedUser();
     const { getDb } = await import("../helpers.js");

@@ -109,6 +109,25 @@ export async function handlePostback(event: webhook.PostbackEvent): Promise<void
     return;
   }
 
+  if (action === "friends") {
+    const lineUserId = event.source?.userId;
+    if (!lineUserId) return;
+    const [me] = await db.select().from(users).where(eq(users.lineUserId, lineUserId)).limit(1);
+    if (!me) return;
+    const { listFriendsWithOutstanding } = await import("../../lib/shadowAccount.js");
+    const friends = await listFriendsWithOutstanding(me.id);
+    if (friends.length === 0) {
+      await replyText(
+        replyToken,
+        "你還沒有記過任何好友的帳。試試「和小明吃飯我先出 500 他出250」，我會自動幫你建立好友！",
+      );
+      return;
+    }
+    const { buildFriendListFlex } = await import("../flex/friendList.js");
+    await replyMessages(replyToken, [buildFriendListFlex(friends)]);
+    return;
+  }
+
   if (action === "friend_pin") {
     const friendId = params.get("friendId");
     const lineUserId = event.source?.userId;
