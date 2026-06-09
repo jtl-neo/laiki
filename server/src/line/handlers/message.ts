@@ -87,6 +87,10 @@ export async function handleTextMessage(event: webhook.MessageEvent): Promise<vo
   // of starting a brand-new parse.
   if (await tryAnswerAmount(event.replyToken, user.id, null, text, "personal")) return;
 
+  // Query intercept: 「今日花費」「餐飲花多少」「上月比較」… answer with a
+  // stats card instead of treating the question as a record.
+  if (await tryQuery(event.replyToken, user.id, text)) return;
+
   await showLoading(lineUserId, 10);
 
   const quota = await checkAndConsume(user.id, "parse");
@@ -189,6 +193,32 @@ export async function handleTextMessage(event: webhook.MessageEvent): Promise<vo
   const advanced =
     (await setStep(pending.id, computeNextStep(routed.mode, routed.draft))) ?? pending;
   await replyForStep(event.replyToken, advanced, routed.mode);
+}
+
+/**
+ * Answer a natural-language spending query with a stats card. Returns false
+ * (fall through to the parser) when the text isn't a recognizable query.
+ */
+async function tryQuery(replyToken: string, userId: string, text: string): Promise<boolean> {
+  const { classifyIntent, parseSimpleQuery } = await import("../../ai/queryIntent.js");
+  if (classifyIntent(text) !== "query") return false;
+  const q = parseSimpleQuery(text);
+  if (!q) return false;
+
+  const { runQuery } = await import("../../lib/queryEngine.js");
+  const { buildQueryResultFlex } = await import("../flex/queryResult.js");
+  const result = await runQuery(userId, q);
+  await replyMessages(replyToken, [
+    flexWithQuickReply(
+      buildQueryResultFlex(result),
+      quickReplyActions([
+        { label: "本月", text: "本月花費" },
+        { label: "今日", text: "今日花費" },
+        { label: "選單", data: "action=menu", displayText: "選單" },
+      ]),
+    ),
+  ]);
+  return true;
 }
 
 /**
