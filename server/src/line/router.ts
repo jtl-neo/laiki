@@ -80,10 +80,21 @@ export async function routeUnified(
     return { mode: "fund", draft, fundGroupId };
   }
 
-  // transfer → personal draft kept as kind=transfer: it debits the account
-  // (real money out) but is excluded from expense/income stats and never
-  // touches split debts. No category step.
+  // transfer → personal draft kept as kind=transfer: it debits the source
+  // account (real money out), is excluded from expense/income stats and
+  // never touches split debts. No category step.
+  // Account-to-account ("從現金轉到LINE Pay"): resolve the destination among
+  // the user's own accounts → two-leg transfer (credited at commit).
   if (parse.type === "transfer") {
+    const dest = d.transfer_to
+      ? resolveAccount(opts.accounts, d.transfer_to)
+      : null;
+    const sameAsSource = dest && account && dest.id === account.id;
+    const transferToAccountId = dest && !sameAsSource ? dest.id : null;
+    const note =
+      transferToAccountId && account && dest
+        ? `轉帳：${account.name} → ${dest.name}`
+        : (d.description ?? opts.fallbackNote);
     return {
       mode: "personal",
       draft: {
@@ -91,7 +102,8 @@ export async function routeUnified(
         kind: "transfer",
         category: null,
         categoryResolved: true,
-        note: d.description ?? opts.fallbackNote,
+        transferToAccountId,
+        note,
       },
       fundGroupId: null,
     };

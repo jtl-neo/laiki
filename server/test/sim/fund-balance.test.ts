@@ -141,6 +141,44 @@ describe.skipIf(!integrationAvailable)("fund routing + balance intents (吞金�
     expect(await db.select().from(debts)).toHaveLength(0); // no split debt
   });
 
+  it("account-to-account transfer moves money between both accounts", async () => {
+    const me = await uid(ME);
+    const { seedAccount } = await import("../helpers.js");
+    // Distinct, unambiguous names (the default wallet is 錢包現金).
+    const src = await seedAccount(me, "玉山帳戶", 1000);
+    const dst = await seedAccount(me, "街口支付", 500);
+
+    sim.provider.enqueue({
+      type: "transfer",
+      is_complete: true,
+      confidence: 0.9,
+      data: {
+        description: "轉帳",
+        total_amount: 215,
+        payment_method: "玉山帳戶",
+        transfer_to: "街口支付",
+      },
+    });
+    await sim.send(textEvent(ME, "轉帳 215 從玉山帳戶到街口支付"));
+    const reply = messageText(lastReply()!.messages);
+    expect(reply).toContain("confirm_entry");
+    const pendingId = /pendingId=([0-9a-f-]+)/.exec(reply)?.[1];
+    await sim.send(postbackEvent(ME, `action=confirm_entry&pendingId=${pendingId}`));
+
+    const db = await getDb();
+    const { transactions, accounts } = await import("../../src/db/schema.js");
+    const [srcAfter] = await db.select().from(accounts).where(eq(accounts.id, src.id));
+    const [dstAfter] = await db.select().from(accounts).where(eq(accounts.id, dst.id));
+    expect(Number(srcAfter!.balance)).toBe(785); // 1000 - 215
+    expect(Number(dstAfter!.balance)).toBe(715); // 500 + 215
+
+    // Two legs, mutually paired.
+    const txs = await db.select().from(transactions);
+    expect(txs).toHaveLength(2);
+    expect(txs.every((t) => t.kind === "transfer")).toBe(true);
+    expect(txs.every((t) => t.transferPairId !== null)).toBe(true);
+  });
+
   it("plain 餘額 still hits the legacy personal balance card", async () => {
     const me = await uid(ME);
     await seedFundGroup(me, "吞金獸", 10000, []);

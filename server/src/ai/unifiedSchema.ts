@@ -41,6 +41,9 @@ export const UnifiedParseSchema = z.object({
     my_share: z.number().nullable().default(null),
     debts: z.preprocess((v) => v ?? [], z.array(DebtItemSchema)),
     fund_name: nullableStr,
+    // For account-to-account transfers: the destination account name.
+    // (payment_method holds the source account.)
+    transfer_to: nullableStr,
     category: nullableStr,
     tx_date: txDateStr,
   }),
@@ -95,6 +98,11 @@ export const UNIFIED_JSON_SCHEMA: JsonSchema = {
           },
         },
         fund_name: { type: "string", description: "基金支出時的基金名稱，對應「已知基金」清單" },
+        transfer_to: {
+          type: "string",
+          description:
+            "帳戶間轉帳的『轉入』帳戶名稱（payment_method 放轉出帳戶）。例如「從現金轉到LINE Pay」→ payment_method=現金, transfer_to=LINE Pay",
+        },
         category: { type: "string", description: "分類：餐飲/交通/購物/娛樂/教育/醫療/居家/通訊/其他" },
         tx_date: { type: "string", description: "YYYY-MM-DD；使用者沒指定寫 null" },
       },
@@ -112,6 +120,7 @@ type 判斷：
 - 含「共同基金/公費/基金」且是支出 → fund_expense
 - 訊息中出現「已知基金」清單裡的名稱（例如基金叫「吞金獸」，使用者說「吞金獸消費4500」）→ fund_expense，fund_name 填該名稱、total_amount=4500（基金名後面緊接的數字就是金額）
 - 含「收到/入帳/薪水」→ income；含「轉帳/提款」→ transfer
+- 帳戶間轉帳（「從A轉到B」「A轉B」）：payment_method=轉出帳戶, transfer_to=轉入帳戶
 - 其他 → expense
 
 分帳數學（split_expense）：

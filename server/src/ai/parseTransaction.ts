@@ -36,6 +36,11 @@ const SIMPLE_PARSE_CONFIDENCE = 0.92;
 const SPLIT_HINT_RE =
   /我先出|先出錢|先墊|墊付|平分|均分|AA|各付|各出|分帳|欠我|我欠|欠款|共同基金|公費|基金/iu;
 
+// Account-to-account transfers ("從A轉到B"、"A轉B"、"轉到B"、"匯到B") carry a
+// DESTINATION the single-account fast path can't represent — bail to the LLM
+// so both the source and the destination are extracted.
+const TRANSFER_DEST_RE = /轉到|轉入|轉去|轉進|匯到|匯入|匯去|存到|從.+到|.+轉(?:帳)?(?:到|進|入)/u;
+
 const AMOUNT_RE =
   /(?:(?:NT\$|NTD|TWD|\$)\s*)?(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)(?:\s*(元|塊|圓))?/giu;
 
@@ -128,6 +133,11 @@ export function parseSimpleText(text: string, now = new Date()): ParseResult | n
   const normalized = normalizeUserText(text);
   if (!normalized) return null;
   if (SPLIT_HINT_RE.test(normalized)) return null;
+  // Only bail for transfer DESTINATION phrasing, not every "轉" (提款/轉帳
+  // without a target still take the fast path).
+  if (/轉|匯|提款|提領/u.test(normalized) && TRANSFER_DEST_RE.test(normalized)) {
+    return null;
+  }
 
   const amount = pickAmountCandidate(normalized);
   if (!amount) return null;

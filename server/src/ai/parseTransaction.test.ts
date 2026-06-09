@@ -120,6 +120,19 @@ describe("parseSimpleText", () => {
   it("bails on fund phrasing (共同基金)", () => {
     expect(parseSimpleText("用共同基金買衛生紙450")).toBeNull();
   });
+
+  // Account-to-account transfers need the LLM to capture the destination.
+  it("bails on account-to-account transfer (從A到B)", () => {
+    expect(parseSimpleText("轉帳 215 從現金到 LINE Pay")).toBeNull();
+  });
+
+  it("bails on 轉到 phrasing", () => {
+    expect(parseSimpleText("現金轉到街口 500")).toBeNull();
+  });
+
+  it("keeps simple 提款 on the fast path (no destination)", () => {
+    expect(parseSimpleText("提款 3000")).not.toBeNull();
+  });
 });
 
 describe("parseText", () => {

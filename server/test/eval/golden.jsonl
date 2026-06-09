@@ -30,3 +30,4 @@
 {"text": "今天跟朋友去吃飯好開心", "expect": {"type": "expense", "total_amount": null}}
 {"text": "家裡用的東西消費450", "expect": {"type": "fund_expense", "total_amount": 450, "fund_name": "家裡用的東西"}}
 {"text": "轉帳給姿盈10000", "expect": {"type": "transfer", "total_amount": 10000}}
+{"text": "轉帳 215 從現金到 LINE Pay", "expect": {"type": "transfer", "total_amount": 215}}

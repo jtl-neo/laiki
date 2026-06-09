@@ -39,6 +39,8 @@ export type DraftData = {
   myShare?: number | null;
   /** Resolved payment_methods.id when the unified flow asked for one. */
   paymentMethodId?: string | null;
+  /** Account-to-account transfer destination (credited at commit). */
+  transferToAccountId?: string | null;
   /** Backend-derived missing fields driving the unified follow-up flow. */
   missingFields?: string[];
   /** Set when a fund_expense parse matched one of the user's fund groups. */
@@ -382,6 +384,37 @@ export async function commitPending(pendingId: string): Promise<CommitResult> {
 
       // Apply the balance delta exactly once for the account touched.
       await applyDelta(accountId, signedAmount(draft.kind, amount), tx);
+
+      // Account-to-account transfer: insert the credit leg into the
+      // destination account and link the two with transferPairId. Net worth
+      // is unchanged (source −amount, destination +amount).
+      if (
+        mode === "personal" &&
+        draft.kind === "transfer" &&
+        draft.transferToAccountId &&
+        draft.transferToAccountId !== accountId
+      ) {
+        const [creditLeg] = await tx
+          .insert(transactions)
+          .values({
+            groupId,
+            accountId: draft.transferToAccountId,
+            amount: amount.toFixed(2),
+            txDate,
+            paidByUserId: row.userId,
+            kind: "transfer",
+            note: draft.note ?? null,
+            source: "line_text",
+            transferPairId: inserted.id,
+          })
+          .returning();
+        if (!creditLeg) throw new Error("transfer_credit_insert_failed");
+        await tx
+          .update(transactions)
+          .set({ transferPairId: creditLeg.id })
+          .where(eq(transactions.id, inserted.id));
+        await applyDelta(draft.transferToAccountId, Math.abs(amount), tx);
+      }
 
       // Link the originating AI record (if any) to the committed transaction.
       // Best-effort: a failure here must never roll back the committed write.
